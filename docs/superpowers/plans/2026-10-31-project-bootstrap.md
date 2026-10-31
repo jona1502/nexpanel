@@ -1,6 +1,6 @@
 # NexPanel Bootstrap Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Reproduzierbar baubare Grundgerüste für die Windows-App und die Astro-Website mit dokumentierter Installation erstellen.
 
@@ -36,12 +36,12 @@
 
 **Interfaces:** Stellt Rust 1.96.1 mit rustfmt/clippy und Node 24 für spätere Tasks bereit. `scripts/use-node.ps1` wird dot-sourced und stellt Node nur für die aktuelle Shell bereit.
 
-- [ ] Bestehende Werkzeuge erneut prüfen; Node-Version und Download anhand offizieller Node- und Astro-Quellen verifizieren.
-- [ ] Gemeinsame Textformatierung und Ignore-Regeln für Cargo-Ausgabe, npm, Astro, lokale Werkzeuge und SDD-Artefakte einrichten.
-- [ ] Rust-Version mit rustfmt/clippy festlegen und fehlende Komponenten installieren.
-- [ ] Node 24 benutzerlokal oder unter ignoriertem `.tools` ablegen; offizielle SHA256-Prüfsumme vor Verwendung verifizieren. Kein globaler PATH-Umbau.
-- [ ] Node-Aktivierung und Setup dokumentieren; in neuer PowerShell Version und npm-Aufruf prüfen. Windows-npm-Aufrufe verwenden `npm.cmd`.
-- [ ] `git diff --check` und Werkzeugversionen prüfen. Commit: `chore: configure repository and development tooling`.
+- [x] Bestehende Werkzeuge erneut prüfen; Node-Version und Download anhand offizieller Node- und Astro-Quellen verifizieren.
+- [x] Gemeinsame Textformatierung und Ignore-Regeln für Cargo-Ausgabe, npm, Astro, lokale Werkzeuge und SDD-Artefakte einrichten.
+- [x] Rust-Version mit rustfmt/clippy festlegen und fehlende Komponenten installieren.
+- [x] Node 24 benutzerlokal oder unter ignoriertem `.tools` ablegen; offizielle SHA256-Prüfsumme vor Verwendung verifizieren. Kein globaler PATH-Umbau.
+- [x] Node-Aktivierung und Setup dokumentieren; in neuer PowerShell Version und npm-Aufruf prüfen. Windows-npm-Aufrufe verwenden `npm.cmd`.
+- [x] `git diff --check` und Werkzeugversionen prüfen. Commit: `chore: configure repository and development tooling`.
 
 ### Task 2: Desktop-Grundgerüst
 
@@ -49,12 +49,12 @@
 
 **Interfaces:** Workspace-Mitglied `apps/desktop`, Binary-Paket `nexpanel`; `cargo run -p nexpanel` öffnet das Setup-Fenster.
 
-- [ ] Aktuelle kompatible Slint-Version anhand offizieller Dokumentation und Registry prüfen; identische Version für slint und slint-build verwenden.
-- [ ] Root-Workspace und ein Binary-Paket erstellen. UI über build.rs kompilieren; generierten Code in main.rs einbinden.
-- [ ] Ein kleines Fenster mit NexPanel-Titel, Setup-Beschriftung und spezifizierten Farben erstellen. Schließen beendet die App.
-- [ ] `cargo fmt --all -- --check`, `cargo check --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings` und `cargo build --workspace --locked` erfolgreich ausführen.
-- [ ] Fensterstart prüfen; Prozess danach gezielt beenden. Visuelle Einschränkungen und Build-Ergebnis dokumentieren.
-- [ ] Commit: `chore(desktop): scaffold Rust and Slint application`.
+- [x] Aktuelle kompatible Slint-Version anhand offizieller Dokumentation und Registry prüfen; identische Version für slint und slint-build verwenden.
+- [x] Root-Workspace und ein Binary-Paket erstellen. UI über build.rs kompilieren; generierten Code in main.rs einbinden.
+- [x] Ein kleines Fenster mit NexPanel-Titel, Setup-Beschriftung und spezifizierten Farben erstellen. Schließen beendet die App.
+- [x] `cargo fmt --all -- --check`, `cargo check --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings` und `cargo build --workspace --locked` erfolgreich ausführen.
+- [x] Fensterstart prüfen; Prozess danach gezielt beenden. Visuelle Einschränkungen und Build-Ergebnis dokumentieren.
+- [x] Commit: `chore(desktop): scaffold Rust and Slint application`.
 
 ### Task 3: Website-Grundgerüst
 
@@ -62,12 +62,12 @@
 
 **Interfaces:** `npm.cmd run dev`, `npm.cmd run check` und `npm.cmd run build` im Website-Verzeichnis, mit Node aus Task 1.
 
-- [ ] Minimales Astro-Projekt ohne zusätzliches Framework erstellen. `@astrojs/check` und TypeScript als devDependencies ergänzen.
-- [ ] TypeScript strict sowie statische Ausgabe und Skripte für dev, check, build und preview konfigurieren.
-- [ ] Neutrale NexPanel-Setup-Seite mit deutschem Text, `lang="de"`, HTML-Titel und Viewport erstellen.
-- [ ] `npm.cmd ci`, `npm.cmd run check` und `npm.cmd run build` erfolgreich ausführen.
-- [ ] Lokalen Server versteckt starten, Seite per HTTP auf Titel und Sprache prüfen und Server anschließend gezielt stoppen.
-- [ ] Commit: `chore(website): scaffold Astro website`.
+- [x] Minimales Astro-Projekt ohne zusätzliches Framework erstellen. `@astrojs/check` und TypeScript als devDependencies ergänzen.
+- [x] TypeScript strict sowie statische Ausgabe und Skripte für dev, check, build und preview konfigurieren.
+- [x] Neutrale NexPanel-Setup-Seite mit deutschem Text, `lang="de"`, HTML-Titel und Viewport erstellen.
+- [x] `npm.cmd ci`, `npm.cmd run check` und `npm.cmd run build` erfolgreich ausführen.
+- [x] Lokalen Server versteckt starten, Seite per HTTP auf Titel und Sprache prüfen und Server anschließend gezielt stoppen.
+- [x] Commit: `chore(website): scaffold Astro website`.
 
 ### Task 4: CI und Abschlussdokumentation
 
@@ -75,12 +75,12 @@
 
 **Interfaces:** CI verwendet die bereits geprüften lokalen Befehle; Windows-Job baut Desktop, Website-Job prüft und baut Astro.
 
-- [ ] Windows-CI für Rust mit Version 1.96.1, rustfmt/clippy und --locked einrichten.
-- [ ] Website-CI mit Node 24, npm ci, check und build einrichten.
-- [ ] README und Setup mit exakten verwendeten Versionen, Voraussetzungen, Startbefehlen und gemessenen Prüfergebnissen vervollständigen. Keine ungeprüften Performance-Zusagen.
-- [ ] Workflow auf korrekte Arbeitsverzeichnisse, Lockfile-Pfade und Übereinstimmung mit lokalen Befehlen prüfen. Remote-CI bleibt ohne Push ungeprüft.
-- [ ] `git diff --check` ausführen; Task-Häkchen anhand tatsächlich erbrachter Nachweise aktualisieren.
-- [ ] Commit: `ci: add desktop and website build checks`.
+- [x] Windows-CI für Rust mit Version 1.96.1, rustfmt/clippy und --locked einrichten.
+- [x] Website-CI mit Node 24, npm ci, check und build einrichten.
+- [x] README und Setup mit exakten verwendeten Versionen, Voraussetzungen, Startbefehlen und gemessenen Prüfergebnissen vervollständigen. Keine ungeprüften Performance-Zusagen.
+- [x] Workflow auf korrekte Arbeitsverzeichnisse, Lockfile-Pfade und Übereinstimmung mit lokalen Befehlen prüfen. Remote-CI bleibt ohne Push ungeprüft.
+- [x] `git diff --check` ausführen; Task-Häkchen anhand tatsächlich erbrachter Nachweise aktualisieren.
+- [x] Commit: `ci: add desktop and website build checks`.
 
 ## Ausführung
 
