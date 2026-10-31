@@ -1,15 +1,17 @@
 # NexPanel
 
-> **Everything in one place.**  
+> **Everything in one place.**
 > Ein schnelles, minimalistisches und erweiterbares Windows Control Center – entwickelt mit **Rust**.
 
-**Projektstatus:** Konzept und Planung  
-**Plattform:** Windows 11 (zunächst x64)  
-**Sprache:** Rust  
-**UI:** Slint  
-**Geplanter Start:** Version 0.1 – Minimal Control Center
+**Projektstatus:** v0.1 lokal implementiert und geprüft; praktische Hardware-/Native-Tests teilweise offen
+**Plattform:** Windows 11 (zunächst x64)
+**Sprache:** Rust
+**UI:** Slint
+**Aktueller Stand:** Version 0.1 – Minimal Control Center (lokal, unveröffentlicht)
 
 ---
+
+Lokale Nachweise und ausdrücklich offene Prüfungen: [docs/testing.md](docs/testing.md). Abgehakte Funktionspunkte bedeuten implementiert, nicht auf jeder Hardware praktisch validiert. Keine Lizenzwahl oder Veröffentlichung erfolgt.
 
 ## 1. Vision
 
@@ -160,41 +162,41 @@ Wir messen diese Werte mit **Release-Builds** auf realer Hardware. Besonders Mon
 
 ### Phase 1 – Fundament
 
-- [ ] Rust-Projekt mit Slint aufsetzen.
-- [ ] Designsystem: Farben, Typografie, Icons, Slider und Buttons.
-- [ ] Tray-Icon und rahmenloses Popup implementieren.
-- [ ] Animationen, Fokusverhalten und Positionierung testen.
-- [ ] Grundlegende Einstellungen lokal speichern.
-- [ ] UI mit Testdaten darstellen.
+- [x] Rust-Projekt mit Slint aufsetzen.
+- [x] Designsystem: Farben, Typografie, Icons, Slider und Buttons.
+- [x] Tray-Icon und rahmenloses Popup implementieren.
+- [ ] Animationen, native Fokusübergänge und Multi-DPI-Positionierung praktisch testen (Implementierung vorhanden).
+- [x] Grundlegende Einstellungen lokal speichern.
+- [x] UI mit echten Gerätewerten und Renderer-Aufnahmen prüfen.
 
 **Definition of Done:** Das Popup lässt sich zuverlässig öffnen und schließen, funktioniert auf mehreren Displays und bleibt im Leerlauf ressourcenschonend.
 
 ### Phase 2 – Monitore
 
-- [ ] Monitore erkennen.
-- [ ] DDC/CI- und weitere geeignete Windows-Zugriffe evaluieren.
-- [ ] Helligkeit pro unterstütztem Gerät steuern.
-- [ ] Gekoppelte Regelung ergänzen.
-- [ ] Fehlerfälle, nicht unterstützte Displays und Hot-Plugging berücksichtigen.
+- [x] Monitore erkennen.
+- [x] DDC/CI- und weitere geeignete Windows-Zugriffe evaluieren.
+- [x] Helligkeit pro unterstütztem Gerät steuern.
+- [x] Gekoppelte Regelung ergänzen.
+- [x] Fehlerfälle, nicht unterstützte Displays und Hot-Plugging berücksichtigen.
 
 **Definition of Done:** Unterstützte Monitore lassen sich ohne blockierende Oberfläche zuverlässig regeln.
 
 ### Phase 3 – Audio
 
-- [ ] Systemlautstärke auslesen und ändern.
-- [ ] Audio-Sessions erkennen und aktualisieren.
-- [ ] App-Regler und Mute-Funktion integrieren.
-- [ ] Geräte- und Session-Wechsel robust behandeln.
+- [x] Systemlautstärke auslesen und ändern.
+- [x] Audio-Sessions erkennen und aktualisieren.
+- [x] App-Regler und Mute-Funktion integrieren.
+- [x] Geräte- und Session-Wechsel robust behandeln.
 
 **Definition of Done:** Die Lautstärke laufender Anwendungen lässt sich getrennt verändern.
 
 ### Phase 4 – Timer & erster Release
 
-- [ ] Timer und Stoppuhr hinzufügen.
-- [ ] Ablaufbenachrichtigungen integrieren.
-- [ ] Konfiguration, Autostart und Bedienbarkeit vervollständigen.
-- [ ] Release-Builds messen und optimieren.
-- [ ] Installer/Distribution und rechtliche Hinweise vorbereiten.
+- [x] Timer und Stoppuhr hinzufügen.
+- [x] Ablaufbenachrichtigungen integrieren.
+- [x] Konfiguration, Autostart und Bedienbarkeit vervollständigen.
+- [ ] Release-Builds messen und nach Messergebnis optimieren.
+- [x] Benutzerlokale PowerShell-Distribution und Hinweise zu offener Lizenz-/Veröffentlichungsprüfung vorbereiten.
 
 **Definition of Done:** Eine stabile, installierbare erste Version mit Tray-Popup, Display-, Audio- und Zeitfunktionen.
 

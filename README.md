@@ -1,24 +1,29 @@
 # NexPanel
 
-Windows-Anwendung mit Rust und Slint sowie eine statische Astro-Website in einem Repository.
+Ein lokales Windows-11-x64-Control-Center mit Rust und Slint: Tray-Popup, echte Displayhelligkeit auf unterstützter Hardware, System- und App-Lautstärke, Countdown, Stoppuhr und persistente Einstellungen. Die deutsche Produktseite entsteht statisch mit Astro.
 
-Das Grundgerüst zeigt ein NexPanel-Setup-Fenster und eine neutrale deutsche Setup-Seite. Tray, Monitorsteuerung, Audio, Timer, Installer und die gestaltete öffentliche Website folgen später.
-
-Verwendet werden Rust/Cargo 1.96.1 (Windows MSVC), Slint/slint-build 1.18.1, Node 24.22.2 mit npm 11.19.1, Astro 7.4.4, @astrojs/check 0.9.12 und TypeScript 6.0.3. Beide Lockfiles sind versioniert.
-
-Nach der vollständigen Installation in der Setup-Anleitung im Repository ausführen:
+Version 0.1 ist lokal implementiert und geprüft. Es gibt noch keinen veröffentlichten Download und keine gewählte Projektlizenz. Performance-Ziele sind ungemessen; Hardware- und native Bedienprüfungen stehen teilweise aus. [Teststand und Grenzen](docs/testing.md).
 
 ```powershell
-# Desktop starten
+git clone https://github.com/jona1502/nexpanel.git
+cd nexpanel
+# Nach Einrichtung von Rust/MSVC gemäß docs/setup.md:
 cargo run -p nexpanel
+# Release-ZIP samt Installationsskripten und SHA256:
+./scripts/package.ps1
+```
 
-# Website starten
+Das ZIP unter `dist/nexpanel-0.1.0-windows-x64.zip` entpacken und dessen `install.ps1` ausführen. Installation nach `%LOCALAPPDATA%\NexPanel\bin`, optional mit Startmenü-Verknüpfung, ohne automatischen App-Start. Autostart wird nur in den App-Einstellungen aktiviert. Einstellungen unter `%LOCALAPPDATA%\NexPanel\settings.json` bleiben bei Deinstallation erhalten.
+
+Tray-Klick öffnet oder verbirgt das Panel; Esc und Schließen blenden aus. Zum Beenden das Tray-Menü verwenden. `--background` startet verborgen, `--diagnostics` liest reale Geräte ohne Hardwareänderungen, `--capture-preview <Verzeichnis>` erzeugt vier echte UI-Aufnahmen ohne Einstellungs- oder Hardwareänderungen und beendet die App. Weitere Optionen: `--help`.
+
+Website lokal:
+
+```powershell
 . ./scripts/use-node.ps1
-Set-Location apps/website
+cd apps/website
 npm.cmd ci
 npm.cmd run dev
 ```
 
-Am 2026-10-31 waren Rust-Formatierung, Check, Clippy und Build sowie npm ci, Astro-Check und statischer Build lokal erfolgreich. Das native Fenster startete und schloss sauber; die gebaute Website lieferte HTTP 200 mit erwartetem Titel, Sprache und Viewport. Visuelle Darstellung, DPI-Skalierung und Performance sind noch ungeprüft. Der [CI-Workflow](.github/workflows/ci.yml) bildet die Build-Prüfungen ab; ohne Push liegt kein Remote-CI-Ergebnis vor.
-
-Installation und Aktivierung: [docs/setup.md](docs/setup.md). Architektur und freigegebener Umfang: [Bootstrap-Entwurf](docs/superpowers/specs/2026-10-31-project-bootstrap-design.md). Produktanforderungen: [NexPanel.md](NexPanel.md).
+[Vollständiges Setup](docs/setup.md) · [Produktumfang](NexPanel.md) · [v0.1-Entwurf](docs/superpowers/specs/2026-10-31-v01-design.md) · [Quellcode](https://github.com/jona1502/nexpanel)
