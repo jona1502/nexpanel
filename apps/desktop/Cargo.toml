@@ -1,0 +1,13 @@
+[package]
+name = "nexpanel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+build = "build.rs"
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-18"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"

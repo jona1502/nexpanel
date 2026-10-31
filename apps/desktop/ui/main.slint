@@ -1,0 +1,34 @@
+export component MainWindow inherits Window {
+    title: "NexPanel";
+    preferred-width: 400px;
+    preferred-height: 240px;
+    background: #181A20;
+    default-font-family: "Segoe UI";
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 16px;
+
+        Text {
+            text: "NexPanel";
+            color: #809CFF;
+            font-size: 26px;
+            font-weight: 600;
+        }
+
+        Rectangle {
+            background: #252832;
+            border-color: #343640;
+            border-width: 1px;
+            border-radius: 12px;
+
+            Text {
+                text: "Setup bereit";
+                color: #F3F4F8;
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
