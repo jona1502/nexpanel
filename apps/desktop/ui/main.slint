@@ -1,34 +1,110 @@
+import { Button, Slider, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
+export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
+export struct AudioItem { id:string, name:string, value:int, muted:bool }
+component Heading inherits Text { color:#f1f3fa; font-size:20px; font-weight:600; }
+component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
+component Card inherits Rectangle { background:#20242e; border-radius:12px; border-width:1px; border-color:#303642; }
 export component MainWindow inherits Window {
-    title: "NexPanel";
-    preferred-width: 400px;
-    preferred-height: 240px;
-    background: #181A20;
-    default-font-family: "Segoe UI";
-
-    VerticalLayout {
-        padding: 16px;
-        spacing: 16px;
-
-        Text {
-            text: "NexPanel";
-            color: #809CFF;
-            font-size: 26px;
-            font-weight: 600;
-        }
-
-        Rectangle {
-            background: #252832;
-            border-color: #343640;
-            border-width: 1px;
-            border-radius: 12px;
-
-            Text {
-                text: "Setup bereit";
-                color: #F3F4F8;
-                font-size: 18px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-    }
+ init => { Palette.color-scheme = ColorScheme.dark; }
+ title:"NexPanel"; width:400px; height:620px; no-frame:true; always-on-top:true;
+ background:#13161d; default-font-family:"Segoe UI"; default-font-size:13px;
+ in-out property<int> tab:0;
+ in property<[DisplayRow]> displays;
+ in property<[AudioItem]> audio;
+ in property<string> display-status:"Monitore werden erkannt …";
+ in property<string> audio-status:"Audio wird erkannt …";
+ in property<string> settings-error;
+ in property<bool> settings-ready:false;
+ in property<bool> settings-blocked:false;
+ in-out property<int> accent-index:0;
+ in-out property<bool> animations:true;
+ in-out property<bool> focus-close:true;
+ in-out property<bool> linked:false;
+ in-out property<bool> autostart:false;
+ in property<string> countdown-text:"00:05:00";
+ in property<string> stopwatch-text:"00:00:00";
+ in property<bool> countdown-running:false;
+ in property<bool> stopwatch-running:false;
+ in property<bool> expired:false;
+ in-out property<int> seconds:300;
+ out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#86a6ff;
+ callback hide-panel(); callback refresh-display(); callback refresh-audio();
+ callback brightness(string,int); callback volume(string,int); callback mute(string,bool);
+ callback save-settings(); callback reset-settings(); callback countdown-action(int); callback stopwatch-action(int);
+ VerticalLayout {
+ padding:20px; spacing:16px;
+ HorizontalLayout { spacing:8px;
+ VerticalLayout {spacing:3px; Text {text:"NexPanel";color:root.accent;font-size:25px;font-weight:700; animate color {duration:root.animations?160ms:0ms;}} Hint{text:"DEIN SYSTEM. EIN PANEL.";font-size:10px;} }
+ Rectangle {horizontal-stretch:1;background:transparent;}
+ Button {text:"×";max-width:32px; clicked=>{root.hide-panel();}}
+ }
+ HorizontalLayout {spacing:5px;
+ for label[i] in ["Displays","Audio","Zeit","Einstellungen"]: Button {min-width:0px;text:label; primary:root.tab==i; clicked=>{root.tab=i;}}
+ }
+ Rectangle {height:1px;background:#303642;}
+ ScrollView {vertical-stretch:1;
+ VerticalLayout {spacing:12px;alignment:start; padding-right:8px;
+ if root.tab==0: VerticalLayout {spacing:12px;alignment:start;
+ HorizontalLayout {Heading{text:"Helligkeit";} Button{text:"Aktualisieren";clicked=>{root.refresh-display();}}}
+ Hint{text:"Direkte Hardwaresteuerung · 0–100 %";}
+ if root.display-status!="": Hint{text:root.display-status;}
+ if root.displays.length==0: Card {min-height:96px;Text{text:"Keine Monitore verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
+ for row in root.displays: Card {VerticalLayout {padding:14px;spacing:8px;
+ HorizontalLayout {Text{text:row.name;color:#eef0f7;font-weight:600;horizontal-stretch:1;}Text{text:row.supported?row.value+" %":"—";color:root.accent;}}
+ Slider {minimum:0;maximum:100;value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
+ Hint{text:row.status;}
+ }}
+ CheckBox{enabled:root.settings-ready;text:"Unterstützte Displays koppeln";checked:root.linked;toggled=>{root.linked=self.checked;root.save-settings();}}
+ Hint{text:"Ohne DDC/CI oder interne Windows-Helligkeit bleibt ein Display sichtbar, aber nicht regelbar.";}
+ }
+ if root.tab==1: VerticalLayout {spacing:12px;alignment:start;
+ HorizontalLayout {Heading{text:"Lautstärke";} Button{text:"Aktualisieren";clicked=>{root.refresh-audio();}}}
+ Hint{text:"Standardausgabe und Anwendungen · 0–100 %";}
+ if root.audio-status!="": Hint{text:root.audio-status;}
+ if root.audio.length==0: Card {min-height:96px;Text{text:"Kein Audiogerät verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
+ for row in root.audio: Card {VerticalLayout {padding:14px;spacing:8px;
+ HorizontalLayout {Text{text:row.name;color:#eef0f7;font-weight:600;horizontal-stretch:1;}Text{text:row.value+" %";color:root.accent;}}
+ Slider{minimum:0;maximum:100;value:row.value;changed(value)=>{root.volume(row.id,round(value));}}
+ CheckBox{text:"Stumm";checked:row.muted;toggled=>{root.mute(row.id,self.checked);}}
+ }}
+ }
+ if root.tab==2: VerticalLayout {spacing:12px;alignment:start;
+ Heading{text:"Zeit für Fokus";}
+ if root.expired: Rectangle {height:52px;background:#554125;border-radius:10px;Text{text:"✓  Dein Timer ist abgelaufen";color:#ffdb9a;horizontal-alignment:center;vertical-alignment:center;}}
+ Card {VerticalLayout{padding:16px;spacing:12px;
+ Hint{text:"COUNTDOWN";}
+ Text{text:root.countdown-text;color:root.expired?#ffcc88:root.accent;font-size:38px;font-weight:600;horizontal-alignment:center;}
+ HorizontalLayout{Text{text:"Dauer (Sekunden)";color:#b6bdcc;vertical-alignment:center;} SpinBox{minimum:1;maximum:86400;value<=>root.seconds;enabled:!root.countdown-running;}}
+ HorizontalLayout {Button{enabled:!root.expired;text:root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} Button{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
+ }}
+ Card{VerticalLayout{padding:16px;spacing:12px; Hint{text:"STOPPUHR";}
+ Text{text:root.stopwatch-text;color:#edf0fa;font-size:38px;font-weight:600;horizontal-alignment:center;}
+ HorizontalLayout{Button{text:root.stopwatch-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.stopwatch-action(0);}}Button{text:"Zurücksetzen";clicked=>{root.stopwatch-action(1);}}}
+ }}
+ Hint{text:"Läuft auch bei verborgenem Panel und im Standby weiter. Beim App-Neustart werden beide Uhren zurückgesetzt.";}
+ }
+ if root.tab==3: VerticalLayout {spacing:12px;alignment:start;
+ Heading{text:"Einstellungen";}
+ if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
+ Card{VerticalLayout{padding:14px;spacing:12px;
+ Hint{text:"AKZENTFARBE";}
+ ComboBox{model:["Blau","Violett","Grün","Orange"];current-index<=>root.accent-index;enabled:root.settings-ready;selected(value)=>{root.save-settings();}}
+ CheckBox{text:"Animationen";checked:root.animations;enabled:root.settings-ready;toggled=>{root.animations=self.checked;root.save-settings();}}
+ CheckBox{text:"Bei Fokusverlust ausblenden";checked:root.focus-close;enabled:root.settings-ready;toggled=>{root.focus-close=self.checked;root.save-settings();}}
+ CheckBox{text:"Displayhelligkeit koppeln";checked:root.linked;enabled:root.settings-ready;toggled=>{root.linked=self.checked;root.save-settings();}}
+ CheckBox{text:"Mit Windows starten (im Tray)";checked:root.autostart;enabled:root.settings-ready;toggled=>{root.autostart=self.checked;root.save-settings();}}
+ }}
+ Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
+ Button{text:"Einstellungen zurücksetzen";enabled:root.settings-ready;clicked=>{root.reset-settings();}}
+ Hint{text:"NexPanel 0.1 · Windows 11\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
+ }
+ }
+ }
+ Hint{text:"NEXPANEL  /  0.1";font-size:10px;}
+ }
+}
+export component AppTray inherits SystemTrayIcon {
+ icon:@image-url("../assets/tray.png");tooltip:"NexPanel – Systemsteuerung";
+ callback open();callback quit();callback toggle(); clicked=>{root.toggle();}
+ Menu {MenuItem{title:"Öffnen";activated=>{root.open();}} MenuItem{title:"Beenden";activated=>{root.quit();}}}
 }
