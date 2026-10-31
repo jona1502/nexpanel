@@ -40,3 +40,5 @@ pub enum AudioCommand {
     SetActive(bool),
     Shutdown,
 }
+
+pub mod display;
