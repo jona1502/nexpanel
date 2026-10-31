@@ -6,7 +6,7 @@ component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
 component Card inherits Rectangle { background:#20242e; border-radius:12px; border-width:1px; border-color:#303642; }
 export component MainWindow inherits Window {
  init => { Palette.color-scheme = ColorScheme.dark; }
- title:"NexPanel"; width:400px; height:620px; no-frame:true; always-on-top:true;
+ title:"NexPanel"; preferred-width:400px; preferred-height:620px; min-width:0px; min-height:0px; no-frame:true; always-on-top:true;
  background:#13161d; default-font-family:"Segoe UI"; default-font-size:13px;
  in-out property<int> tab:0;
  in property<[DisplayRow]> displays;
@@ -75,7 +75,7 @@ export component MainWindow inherits Window {
  Hint{text:"COUNTDOWN";}
  Text{text:root.countdown-text;color:root.expired?#ffcc88:root.accent;font-size:38px;font-weight:600;horizontal-alignment:center;}
  HorizontalLayout{Text{text:"Dauer (Sekunden)";color:#b6bdcc;vertical-alignment:center;} SpinBox{minimum:1;maximum:86400;value<=>root.seconds;enabled:!root.countdown-running;}}
- HorizontalLayout {Button{enabled:!root.expired;text:root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} Button{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
+ HorizontalLayout {Button{text:root.expired?"Neu starten":root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} Button{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
  }}
  Card{VerticalLayout{padding:16px;spacing:12px; Hint{text:"STOPPUHR";}
  Text{text:root.stopwatch-text;color:#edf0fa;font-size:38px;font-weight:600;horizontal-alignment:center;}

@@ -14,6 +14,38 @@ pub fn popup_position(a: Area, c: (i32, i32), s: (i32, i32)) -> (i32, i32) {
 pub fn autostart_command(path: &str) -> String {
     format!("\"{path}\" --background")
 }
+#[derive(Debug)]
+pub struct PopupBounds {
+    pub position: (i32, i32),
+    pub physical_size: (u32, u32),
+    pub logical_size: (f64, f64),
+}
+pub fn popup_bounds(area: Area, cursor: (i32, i32), scale: f64) -> PopupBounds {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let width = area.right.saturating_sub(area.left).max(1);
+    let height = area.bottom.saturating_sub(area.top).max(1);
+    let margin_x = if width > 16 { 8 } else { 0 };
+    let margin_y = if height > 16 { 8 } else { 0 };
+    let inset = Area {
+        left: area.left + margin_x,
+        top: area.top + margin_y,
+        right: area.right - margin_x,
+        bottom: area.bottom - margin_y,
+    };
+    let size = (
+        ((400.0 * scale).round() as i32).clamp(1, width - margin_x * 2) as u32,
+        ((620.0 * scale).round() as i32).clamp(1, height - margin_y * 2) as u32,
+    );
+    PopupBounds {
+        position: popup_position(inset, cursor, (size.0 as i32, size.1 as i32)),
+        physical_size: size,
+        logical_size: (size.0 as f64 / scale, size.1 as f64 / scale),
+    }
+}
 #[cfg(windows)]
 pub fn position(window: &slint::Window) {
     use slint::winit_030::WinitWindowAccessor;
@@ -35,7 +67,7 @@ pub fn position(window: &slint::Window) {
         if !GetMonitorInfoW(monitor, &mut info).as_bool() {
             return;
         }
-        window.with_winit_window(|native| {
+        let Some(bounds) = window.with_winit_window(|native| {
             let scale = native
                 .available_monitors()
                 .find(|m| {
@@ -48,7 +80,7 @@ pub fn position(window: &slint::Window) {
                 })
                 .map_or(native.scale_factor(), |m| m.scale_factor());
             let a = info.rcWork;
-            let (x, y) = popup_position(
+            popup_bounds(
                 Area {
                     left: a.left,
                     top: a.top,
@@ -56,12 +88,23 @@ pub fn position(window: &slint::Window) {
                     bottom: a.bottom,
                 },
                 (point.x, point.y),
-                (
-                    (400.0 * scale).round() as i32,
-                    (620.0 * scale).round() as i32,
-                ),
+                scale,
+            )
+        }) else {
+            return;
+        };
+        let size = slint::PhysicalSize::new(bounds.physical_size.0, bounds.physical_size.1);
+        if window.size() != size {
+            window.set_size(size);
+        }
+        window.with_winit_window(|native| {
+            let desired = slint::winit_030::winit::dpi::PhysicalPosition::new(
+                bounds.position.0,
+                bounds.position.1,
             );
-            native.set_outer_position(slint::winit_030::winit::dpi::PhysicalPosition::new(x, y));
+            if native.outer_position().ok() != Some(desired) {
+                native.set_outer_position(desired);
+            }
         });
     }
 }
@@ -241,6 +284,37 @@ impl Drop for Instance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn high_dpi_popup_fits_work_area_with_margin() {
+        let area = Area {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let bounds = popup_bounds(area, (1900, 1030), 2.0);
+        assert!(bounds.logical_size.1 <= 512.0);
+        assert_eq!(bounds.logical_size.0, 400.0);
+        assert!(bounds.position.0 >= 8 && bounds.position.1 >= 8);
+        assert!(bounds.position.0 + bounds.physical_size.0 as i32 <= area.right - 8);
+        assert!(bounds.position.1 + bounds.physical_size.1 as i32 <= area.bottom - 8);
+    }
+    #[test]
+    fn popup_bounds_fit_negative_monitor_with_top_taskbar() {
+        let area = Area {
+            left: -1920,
+            top: 64,
+            right: 0,
+            bottom: 1080,
+        };
+        let bounds = popup_bounds(area, (-1900, 0), 2.0);
+        assert_eq!(bounds.position.0, -1912);
+        assert_eq!(bounds.position.1, 72);
+        assert!(bounds.position.1 + bounds.physical_size.1 as i32 <= 1072);
+        let normal = popup_bounds(area, (-50, 1000), 1.0);
+        assert_eq!(normal.logical_size, (400.0, 620.0));
+        assert_eq!(normal.physical_size, (400, 620));
+    }
     #[test]
     fn clamps_negative_monitor_and_left_taskbar() {
         assert_eq!(

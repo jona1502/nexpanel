@@ -89,6 +89,30 @@ fn apply_config(app: &MainWindow, c: &Config) {
     app.set_linked(c.linked_displays);
     app.set_autostart(c.autostart);
 }
+fn apply_countdown_action(
+    timer: &mut Countdown,
+    duration: &mut i32,
+    expired: &mut bool,
+    selected: i32,
+    reset: bool,
+    now: u64,
+) {
+    let selected = selected.clamp(1, 86400);
+    if reset {
+        *timer = Countdown::new(selected as u64 * 1000).expect("bounded duration");
+        *duration = selected;
+        *expired = false;
+    } else if timer.is_running() {
+        timer.pause(now);
+    } else {
+        if *expired || *duration != selected {
+            *timer = Countdown::new(selected as u64 * 1000).expect("bounded duration");
+            *duration = selected;
+            *expired = false;
+        }
+        timer.start(now);
+    }
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mode = parse_arguments(&args)?;
@@ -166,7 +190,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = window.hide();
                 return EventResult::PreventDefault;
             }
-            winit::event::WindowEvent::ScaleFactorChanged { .. } => platform::position(window),
+            winit::event::WindowEvent::ScaleFactorChanged { .. } => {
+                // Apply after Slint has processed the new scale, outside this native event callback.
+                let weak = weak.clone();
+                slint::Timer::single_shot(Duration::ZERO, move || {
+                    if let Some(app) = weak.upgrade() {
+                        platform::position(app.window());
+                    }
+                });
+            }
             _ => {}
         }
         EventResult::Propagate
@@ -303,22 +335,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move |action| {
             if let Some(a) = weak.upgrade() {
                 let mut c = c.borrow_mut();
-                if action == 1 {
-                    *c = Countdown::new(a.get_seconds().clamp(1, 86400) as u64 * 1000)
-                        .expect("bounded duration");
-                    duration.set(a.get_seconds());
-                    a.set_expired(false);
-                } else if c.is_running() {
-                    c.pause(now());
-                } else {
-                    if duration.get() != a.get_seconds() {
-                        *c = Countdown::new(a.get_seconds().clamp(1, 86400) as u64 * 1000)
-                            .expect("bounded duration");
-                        duration.set(a.get_seconds());
-                        a.set_expired(false);
-                    }
-                    c.start(now());
-                }
+                let mut selected_duration = duration.get();
+                let mut expired = a.get_expired();
+                apply_countdown_action(
+                    &mut c,
+                    &mut selected_duration,
+                    &mut expired,
+                    a.get_seconds(),
+                    action == 1,
+                    now(),
+                );
+                duration.set(selected_duration);
+                a.set_expired(expired);
                 a.set_countdown_running(c.is_running());
                 a.set_countdown_text(clock(c.remaining_ms(now()).saturating_add(999)));
             }
@@ -511,6 +539,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expired_countdown_controller_restarts_selected_duration_and_clears_alarm() {
+        let mut timer = Countdown::new(1000).unwrap();
+        let mut duration = 1;
+        let mut expired = false;
+        apply_countdown_action(&mut timer, &mut duration, &mut expired, 1, false, 1000);
+        expired = timer.poll_expired(2000);
+        assert!(expired);
+        apply_countdown_action(&mut timer, &mut duration, &mut expired, 1, false, 2500);
+        assert!(
+            timer.is_running(),
+            "same-duration restart must start a new countdown"
+        );
+        assert!(!expired, "restart clears the persistent alarm banner");
+        assert_eq!(timer.remaining_ms(2500), 1000);
+        assert!(timer.poll_expired(3500));
+        assert!(!timer.poll_expired(3600));
+        apply_countdown_action(&mut timer, &mut duration, &mut expired, 30, true, 4000);
+        assert!(!timer.is_running());
+        assert_eq!(timer.remaining_ms(4000), 30000);
+    }
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
     }
