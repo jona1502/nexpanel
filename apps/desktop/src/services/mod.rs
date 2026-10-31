@@ -41,4 +41,5 @@ pub enum AudioCommand {
     Shutdown,
 }
 
+pub mod audio;
 pub mod display;
