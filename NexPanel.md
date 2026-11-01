@@ -3,7 +3,7 @@
 > **Everything in one place.**
 > Ein schnelles, minimalistisches und erweiterbares Windows Control Center – entwickelt mit **Rust**.
 
-**Projektstatus:** v0.1 lokal implementiert und geprüft; praktische Hardware-/Native-Tests teilweise offen
+**Projektstatus:** v0.1 lokal implementiert und geprüft; Gesamtreview, Push und praktische Hardware-/Native-Tests offen
 **Plattform:** Windows 11 (zunächst x64)
 **Sprache:** Rust
 **UI:** Slint
@@ -115,7 +115,7 @@ Diese Erweiterungen gehören **nicht** zum ersten Entwicklungsumfang.
 | Windows-Integration | Win32, COM, Core Audio, ggf. WMI |
 | System-Tray | Slint-Integration und bei Bedarf Win32 |
 | Animationen | Slint |
-| Konfiguration | Lokale Datei, z. B. TOML oder JSON |
+| Konfiguration | Lokale JSON-Datei |
 | Entwicklungsziel | Windows 11 x64 |
 
 ### Architekturprinzip

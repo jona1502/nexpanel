@@ -1,6 +1,8 @@
 # Prüfstand v0.1
 
-Lokale Nachweise vom 2026-10-31, Windows x64. Keine Veröffentlichung und kein Remote-CI-Lauf.
+Lokale Nachweise vom 2026-10-31, Windows x64. Keine Veröffentlichung und kein Remote-CI-Lauf. Am 2026-11-01 auf Commit 3eadb28 wiederholt: fmt, Clippy und 35 Tests erfolgreich. Alle übrigen Nachweise stammen vom 2026-10-31.
+
+Der Gesamtreview über den v0.1-Branch steht aus; bisher liegen nur Reviews je Task und ein gezielter Usability-Review vor.
 
 ## Erfolgreich geprüft
 
@@ -27,5 +29,7 @@ Der Distributionstest verwendet einen eigenen GUID-Ordner im Temp-Verzeichnis, k
 Native Tray-Klicks, Esc/Fokusübergänge, mehrere DPI-/Taskleistenkonfigurationen, echte Hardware-Schreibzugriffe einschließlich Wiederherstellung, WMI-Schreiben, Betriebssystem-Schlaf, Hotplug, reale Audio-Gerätewechsel und fremde Rechner. Zwei erkannte Monitore dieses Systems erlauben keine DDC-Helligkeitsregelung; das ist sichtbar und keine behauptete gelöste Treiberbeschränkung.
 
 Langsame synchrone DDC-/WMI-Treiber können den jeweiligen Worker blockieren; kein harter abbrechbarer Treibertimeout. UI bleibt vom Worker getrennt. Audio aktualisiert per Polling. Tray-Positionierung nutzt den Cursor-Monitor als dokumentierten Fallback, nicht private Tray-Icon-Geometrie. Das Panel wird bei hoher DPI oder kleinen Arbeitsbereichen auf die verfügbare Fläche mit Rand verkleinert; Inhalte bleiben scrollbar. Countdown folgt Systemzeitänderungen; Timerzustand wird nicht über App-Neustarts gespeichert.
+
+Bekannte kleinere Lücken der Distribution: Der Konflikt mit einer fremden Startmenü-Verknüpfung wird erst nach dem Kopieren erkannt. Die Schutzpfade für abweichende Installationsmarkierung, verbotene Ziele, Verzeichnisverknüpfungen und gesperrte Pfade sind nicht alle getestet.
 
 Performance-Zielwerte aus NexPanel.md sind nicht gemessen. Startmenü-/Autostartintegration und fremde Installer-Umgebungen brauchen weitere praktische Prüfung. Die CI-Konfiguration enthält Tests, Release-Build und isolierten Pakettest, wurde aber nicht remote ausgeführt. Browser-Layoutprüfung war ohne Browseroberfläche nicht verfügbar; responsive CSS und HTML wurden gebaut und per HTTP geprüft. Projektlizenz, Slint-/Abhängigkeitsfreigaben und Codesignatur sind vor Veröffentlichung zu klären; es wurde keine Lizenz gewählt.

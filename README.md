@@ -1,8 +1,8 @@
 # NexPanel
 
-Ein lokales Windows-11-x64-Control-Center mit Rust und Slint: Tray-Popup, echte Displayhelligkeit auf unterstützter Hardware, System- und App-Lautstärke, Countdown, Stoppuhr und persistente Einstellungen. Die deutsche Produktseite entsteht statisch mit Astro.
+Ein lokales Windows-11-x64-Control-Center mit Rust und Slint: Tray-Popup, echte Displayhelligkeit auf unterstützter Hardware, System- und App-Lautstärke, Countdown, Stoppuhr und persistente Einstellungen. Die deutsche Produktseite ist eine statische Astro-Website.
 
-Version 0.1 ist lokal implementiert und geprüft. Es gibt noch keinen veröffentlichten Download und keine gewählte Projektlizenz. Performance-Ziele sind ungemessen; Hardware- und native Bedienprüfungen stehen teilweise aus. [Teststand und Grenzen](docs/testing.md).
+Version 0.1 ist lokal implementiert und geprüft, aber noch nicht gepusht; der Gesamtreview steht aus. Es gibt noch keinen veröffentlichten Download und keine gewählte Projektlizenz. Performance-Ziele sind ungemessen; Hardware- und native Bedienprüfungen stehen teilweise aus. [Teststand und Grenzen](docs/testing.md).
 
 ```powershell
 git clone https://github.com/jona1502/nexpanel.git

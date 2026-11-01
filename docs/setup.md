@@ -1,6 +1,6 @@
 # Setup und Bedienung
 
-Stand: 2026-10-31. Alle Befehle beginnen im Repository, sofern nicht anders angegeben.
+Stand: 2026-11-01. Alle Befehle beginnen im Repository, sofern nicht anders angegeben.
 
 ## Voraussetzungen
 
@@ -17,11 +17,11 @@ cargo run -p nexpanel
 
 ## Bedienung
 
-Das Panel startet sichtbar; `cargo run -p nexpanel -- --background` startet im Tray. Tray-Klick schaltet es um, das Menü bietet Öffnen und Beenden. Esc, × und Fenster-Schließen blenden aus. Fokusverlust blendet bei aktivierter Einstellung aus. Eine zweite Instanz öffnet die vorhandene Instanz derselben Windows-Sitzung.
+Das Panel startet sichtbar; `cargo run -p nexpanel -- --background` startet im Tray. Tray-Klick schaltet es um, das Menü bietet Öffnen und Beenden. Esc, × und Fenster-Schließen blenden aus. Fokusverlust blendet bei aktivierter Einstellung aus. Eine zweite Instanz öffnet die vorhandene Instanz derselben Windows-Sitzung. Bei hoher DPI oder kleinem Arbeitsbereich wird das Panel auf die verfügbare Fläche verkleinert; Inhalte bleiben scrollbar.
 
 Displays zeigen echte erkannte Geräte und deren Fähigkeiten. DDC/CI muss auf externen Monitoren aktiviert und vom Anschluss/Treiber unterstützt sein; interne Helligkeit benötigt einen passenden WMI-Anbieter. Nicht unterstützte oder mehrdeutige Zuordnungen bleiben deaktiviert mit Erklärung. Gekoppelte Regelung wirkt nur auf unterstützte Geräte. Audio steuert das Standard-Wiedergabegerät und zusammengefasste Prozess-Sessions; es gibt keine Geräteauswahl.
 
-Countdown (1 Sekunde bis 24 Stunden) und Stoppuhr laufen bei verborgenem Panel weiter. Ablauf öffnet einen sichtbaren Hinweis mit Systemton. Schlafzeit zählt mit; Systemzeitänderungen beeinflussen die Zeitmessung. Beim App-Neustart werden beide zurückgesetzt. Akzentfarbe, Animationen, Fokusverhalten, Displaykopplung und Autostart stehen in Einstellungen. Autostart nutzt nur den eigenen HKCU-Run-Wert mit `--background`.
+Countdown (1 Sekunde bis 24 Stunden) und Stoppuhr laufen bei verborgenem Panel weiter. Ablauf öffnet einen sichtbaren Hinweis mit Systemton; „Neu starten“ beginnt den Countdown erneut mit der gewählten Dauer und löscht den Hinweis. Schlafzeit zählt mit; Systemzeitänderungen beeinflussen die Zeitmessung. Beim App-Neustart werden beide zurückgesetzt. Akzentfarbe, Animationen, Fokusverhalten, Displaykopplung und Autostart stehen in Einstellungen. Autostart nutzt nur den eigenen HKCU-Run-Wert mit `--background`.
 
 Konfiguration: `%LOCALAPPDATA%\NexPanel\settings.json`. Fehlende Datei lädt Defaults; beschädigte Datei bleibt erhalten und wird gemeldet. Ein ausdrücklicher Reset ersetzt Einstellungen. Installation verändert die Konfiguration nicht.
 
@@ -85,4 +85,4 @@ cargo build --workspace --release --locked
 ./target/release/nexpanel.exe --capture-preview .superpowers/preview
 ```
 
-Diagnose liest nur; Capture nutzt reale Gerätewerte und kann persönliche App-Namen enthalten. Solche Bilder nicht ungeprüft veröffentlichen. [Testnachweise und offene praktische Prüfungen](testing.md). CI führt Rust-Prüfungen einschließlich Tests und Release-Build sowie Astro check/build aus. Remote-CI wurde ohne Push nicht ausgeführt. Kein Hosting/Deployment, keine Codesignatur oder Lizenzwahl durch diese lokale Umsetzung.
+Diagnose liest nur; Capture nutzt reale Gerätewerte und kann persönliche App-Namen enthalten. Solche Bilder nicht ungeprüft veröffentlichen. [Testnachweise und offene praktische Prüfungen](testing.md). CI führt Rust-Prüfungen einschließlich Tests und Release-Build, den isolierten Pakettest sowie Astro check/build aus. Remote-CI wurde ohne Push nicht ausgeführt. Kein Hosting/Deployment, keine Codesignatur oder Lizenzwahl durch diese lokale Umsetzung.
