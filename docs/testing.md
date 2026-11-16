@@ -68,9 +68,18 @@ Bekannte kleinere Lücken der Distribution: Der Konflikt mit einer fremden Start
 
 Performance-Zielwerte aus NexPanel.md sind nicht gemessen. Startmenü-/Autostartintegration und fremde Installer-Umgebungen brauchen weitere praktische Prüfung. Die CI-Konfiguration enthält Tests, Release-Build und isolierten Pakettest, wurde aber nicht remote ausgeführt. Browser-Layoutprüfung war ohne Browseroberfläche nicht verfügbar; responsive CSS und HTML wurden gebaut und per HTTP geprüft. Projektlizenz, Slint-/Abhängigkeitsfreigaben (siehe [licensing.md](licensing.md)) und Codesignatur sind vor Veröffentlichung zu klären; es wurde keine Lizenz gewählt.
 
-## Bekannte Einschränkung: Esc und ComboBox
+## Akzent-Dropdown und Esc (fix/esc-dropdown)
 
-Esc wird im winit-Handler (`main.rs`) vor Slint abgefangen und blendet das ganze Panel aus, auch wenn das Popup der Akzent-ComboBox offen ist. Die Std-ComboBox von Slint 1.18 macht den Popup-Zustand nicht nach außen sichtbar; ohne Eigenbau-ComboBox lässt sich Esc nicht sicher auf das Popup beschränken. Manueller Test: ComboBox öffnen, Esc drücken – das Panel verschwindet (bekannt, offen).
+Die Std-ComboBox ist durch ein eigenes `Dropdown` + `DropdownList` (`ui/dropdown.slint`) ersetzt; die Liste wird als Overlay im Fenster gezeichnet (Slint-1.18-`PopupWindow.is-open` crasht den Compiler im Debug-Build). Der Offen-Zustand steht in `MainWindow.dropdown-open`; der Esc-Handler in `main.rs` schließt bei offener Liste nur diese (`esc_action`), sonst das Panel. Beim Ausblenden des Panels wird die Liste zurückgesetzt.
+
+Manuelle Tests (Einstellungen-Tab):
+
+- [ ] Akzentliste öffnen, Esc: nur die Liste schließt, das Panel bleibt. Zweites Esc blendet das Panel aus.
+- [ ] Akzentliste öffnen, außerhalb der Liste klicken: nur die Liste schließt.
+- [ ] Eintrag wählen: Akzent ändert sich, Liste schließt, Wert bleibt nach Neustart erhalten.
+- [ ] Liste öffnen, Pfeil hoch/runter und Enter wählen einen Eintrag.
+- [ ] Liste offen, Panel per Tray-Klick/Fokusverlust ausblenden und neu öffnen: Liste ist geschlossen.
+- [ ] Dropdown ist bei `settings-ready == false` (z. B. defekte Einstellungsdatei) nicht bedienbar.
 
 ## Audio: Ereignisse statt Polling (feat/audio-events)
 
