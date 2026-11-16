@@ -44,7 +44,7 @@ if (-not $NoShortcut) {
     if ($shell.CreateShortcut($shortcutPath).TargetPath -ieq $exe) { Remove-Item -LiteralPath $shortcutPath }
   }
 }
-foreach ($file in @('nexpanel.exe','install.ps1','README.md','uninstall.ps1','.nexpanel-install.json')) {
+foreach ($file in @('nexpanel.exe','install.ps1','README.md','THIRD-PARTY-NOTICES.md','VERSION.txt','uninstall.ps1','.nexpanel-install.json')) {
   $path = Join-Path $destination $file
   if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }
 }
