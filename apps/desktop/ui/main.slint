@@ -1,6 +1,7 @@
 import { AboutCard } from "about.slint";
 import { ThinSlider } from "thin_slider.slint";
-import { Button, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
+import { Dropdown, DropdownList } from "dropdown.slint";
+import { Button, ScrollView, CheckBox, SpinBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool }
 component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
@@ -72,6 +73,10 @@ export component MainWindow inherits Window {
  in-out property<bool> focus-close:true;
  in-out property<bool> linked:false;
  in-out property<bool> autostart:false;
+ // True while a dropdown list is open; Rust sets it to false to close it (Esc, panel hide).
+ in-out property<bool> dropdown-open:false;
+ property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
+ property<length> dd-x; property<length> dd-y; property<length> dd-w;
  in property<string> countdown-text:"00:05:00";
  in property<string> stopwatch-text:"00:00:00";
  in property<bool> countdown-running:false;
@@ -200,7 +205,7 @@ export component MainWindow inherits Window {
  if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"AKZENTFARBE";}
- ComboBox{model:["Blau","Violett","Grün","Orange"];current-index<=>root.accent-index;enabled:root.settings-ready;selected(value)=>{root.save-settings();}}
+ Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-open=!root.dropdown-open;}}
  CheckBox{text:"Animationen";checked:root.animations;enabled:root.settings-ready;toggled=>{root.animations=self.checked;root.save-settings();}}
  CheckBox{text:"Bei Fokusverlust ausblenden";checked:root.focus-close;enabled:root.settings-ready;toggled=>{root.focus-close=self.checked;root.save-settings();}}
  CheckBox{text:"Displayhelligkeit koppeln";checked:root.linked;enabled:root.settings-ready;toggled=>{root.linked=self.checked;root.save-settings();}}
@@ -213,4 +218,7 @@ export component MainWindow inherits Window {
  }
  }
  }
+ if root.dropdown-open: DropdownList{model:root.accent-names;current-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y;list-width:root.dd-w;
+  chosen(i)=>{root.accent-index=i;root.dropdown-open=false;root.save-settings();}
+  dismissed=>{root.dropdown-open=false;}}
 }
