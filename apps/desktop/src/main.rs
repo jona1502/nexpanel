@@ -5,6 +5,7 @@ use nexpanel::{
     popup_state::{Action, Event, Popup},
     services::{self, AudioCommand, DisplayCommand},
     settings_worker::{self, Command},
+    time_input::TimeInput,
     time_tools::{Countdown, Stopwatch},
     tray::{self, TrayEvent},
     ui_models::{LocalHold, keep_held, reconcile},
@@ -109,9 +110,16 @@ fn update_timers(
     }
     a.set_countdown_text(clock(c.remaining_ms(t).saturating_add(999)));
     a.set_countdown_running(c.is_running());
+    a.set_countdown_active(c.is_started(t));
     let s = stopwatch.borrow();
     a.set_stopwatch_text(clock(s.elapsed_ms(t)));
     a.set_stopwatch_running(s.is_running());
+}
+fn show_input(a: &MainWindow, t: TimeInput) {
+    let (h, m, s) = t.segments();
+    a.set_input_h(format!("{h:02}").into());
+    a.set_input_m(format!("{m:02}").into());
+    a.set_input_s(format!("{s:02}").into());
 }
 fn clock(ms: u64) -> slint::SharedString {
     let s = ms / 1000;
@@ -476,27 +484,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Countdown::new(300_000).expect("valid default"),
     ));
     let duration = Rc::new(Cell::new(300));
+    let input = Rc::new(Cell::new(TimeInput::from_seconds(300)));
+    show_input(&app, input.get());
+    app.on_time_digit({
+        let (input, weak) = (input.clone(), app.as_weak());
+        move |digit| {
+            if let (Some(a), Ok(d)) = (weak.upgrade(), u32::try_from(digit)) {
+                input.set(input.get().push_digit(d));
+                show_input(&a, input.get());
+            }
+        }
+    });
+    app.on_time_backspace({
+        let (input, weak) = (input.clone(), app.as_weak());
+        move |clear| {
+            if let Some(a) = weak.upgrade() {
+                input.set(if clear {
+                    input.get().clear()
+                } else {
+                    input.get().backspace()
+                });
+                show_input(&a, input.get());
+            }
+        }
+    });
+    app.on_time_step({
+        let (input, weak) = (input.clone(), app.as_weak());
+        move |segment, delta| {
+            if let Some(a) = weak.upgrade() {
+                input.set(
+                    input
+                        .get()
+                        .normalize()
+                        .step(usize::try_from(segment).unwrap_or(2), delta),
+                );
+                show_input(&a, input.get());
+            }
+        }
+    });
     let stopwatch = Rc::new(RefCell::new(Stopwatch::default()));
     app.on_countdown_action({
         let c = countdown.clone();
+        let input = input.clone();
         let weak = app.as_weak();
         let tick_body = tick_body.clone();
         move |action| {
             if let Some(a) = weak.upgrade() {
                 let mut c = c.borrow_mut();
+                if !c.is_started(now()) {
+                    // Idle: the field is the source; carry overflowing segments (00:00:90 -> 00:01:30).
+                    input.set(input.get().normalize());
+                    show_input(&a, input.get());
+                    if input.get().to_seconds() == 0 && action == 0 {
+                        return;
+                    }
+                }
                 let mut selected_duration = duration.get();
                 let mut expired = a.get_expired();
                 apply_countdown_action(
                     &mut c,
                     &mut selected_duration,
                     &mut expired,
-                    a.get_seconds(),
+                    input.get().to_seconds() as i32,
                     action == 1,
                     now(),
                 );
                 duration.set(selected_duration);
                 a.set_expired(expired);
                 a.set_countdown_running(c.is_running());
+                a.set_countdown_active(c.is_started(now()));
                 a.set_countdown_text(clock(c.remaining_ms(now()).saturating_add(999)));
             }
             // Re-arm the expiry timer for the new deadline.

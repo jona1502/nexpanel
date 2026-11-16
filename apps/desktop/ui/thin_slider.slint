@@ -1,6 +1,6 @@
-// Thin slider: 2px track, 10px round thumb. `value` is 0..100; the shown value follows the
+// ThinSlider (volume, brightness): 2px track, 10px round thumb. `value` is 0..100; the shown value follows the
 // pointer while dragging and the bound value otherwise (so model updates keep flowing in).
-export component VolumeSlider inherits Rectangle {
+export component ThinSlider inherits Rectangle {
  in property<float> value;
  in property<bool> dimmed:false;
  in property<bool> enabled:true;
