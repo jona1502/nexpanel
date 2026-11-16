@@ -422,6 +422,19 @@ impl Drop for Instance {
     }
 }
 
+/// Tray icon sizes shipped in `assets/tray-<px>.png`.
+pub const TRAY_ICON_SIZES: [u32; 4] = [16, 20, 24, 32];
+/// Pick the shipped tray icon size closest to the system small-icon size
+/// (`16 * dpi / 96` px); ties go to the larger icon, above 32 px the largest.
+/// TODO: not wired into tray.rs yet (see docs/backlog.md).
+pub fn pick_icon_size(dpi: u32) -> u32 {
+    let wanted = (16 * dpi.max(1) + 48) / 96;
+    TRAY_ICON_SIZES
+        .into_iter()
+        .min_by_key(|s| (s.abs_diff(wanted), u32::MAX - s))
+        .unwrap_or(32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +552,16 @@ mod tests {
         assert_eq!(tool_window_style(APP | 0x8, TOOL, APP), TOOL | 0x8);
         assert_eq!(tool_window_style(TOOL, TOOL, APP), TOOL);
         assert_eq!(tool_window_style(0, TOOL, APP), TOOL);
+    }
+    #[test]
+    fn picks_nearest_tray_icon_size() {
+        assert_eq!(pick_icon_size(96), 16);
+        assert_eq!(pick_icon_size(120), 20);
+        assert_eq!(pick_icon_size(144), 24);
+        assert_eq!(pick_icon_size(168), 32);
+        assert_eq!(pick_icon_size(192), 32);
+        assert_eq!(pick_icon_size(480), 32);
+        assert_eq!(pick_icon_size(0), 16);
     }
     #[test]
     fn startup_approved_byte_patterns() {
