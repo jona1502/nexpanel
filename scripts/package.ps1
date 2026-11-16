@@ -1,9 +1,11 @@
 [CmdletBinding()]
 param([switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'common.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 Push-Location $repo
 try {
+  $version = Get-NexPanelVersion -Repo $repo
   if (-not $SkipBuild) { cargo build -p nexpanel --release --locked; if ($LASTEXITCODE -ne 0) { throw 'Release-Build fehlgeschlagen.' } }
   $binary = Join-Path $repo 'target/release/nexpanel.exe'
   if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Release-Binary fehlt. Zuerst ohne -SkipBuild ausführen.' }
@@ -14,8 +16,10 @@ try {
   try {
     Copy-Item -LiteralPath $binary -Destination $stage
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1'),(Join-Path $PSScriptRoot 'uninstall.ps1') -Destination $stage
+    & (Join-Path $PSScriptRoot 'gen-third-party-notices.ps1') -OutFile (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
+    Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Value $version -Encoding ascii
     Copy-Item -LiteralPath (Join-Path $repo 'docs/package-readme.md') -Destination (Join-Path $stage 'README.md')
-    $zip = Join-Path $dist 'nexpanel-0.1.0-windows-x64.zip'
+    $zip = Join-Path $dist (Get-NexPanelPackageName -Version $version)
     Compress-Archive -LiteralPath (Get-ChildItem -LiteralPath $stage -File).FullName -DestinationPath $zip -Force
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $([IO.Path]::GetFileName($zip))" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
@@ -23,7 +27,7 @@ try {
     Write-Host "SHA256: $hash"
   } finally {
     # Nur eigene bekannte Dateien in der frisch erzeugten Stage löschen.
-    foreach ($name in @('nexpanel.exe','install.ps1','uninstall.ps1','README.md')) { $path = Join-Path $stage $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path } }
+    foreach ($name in @('nexpanel.exe','install.ps1','uninstall.ps1','README.md','THIRD-PARTY-NOTICES.md','VERSION.txt')) { $path = Join-Path $stage $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path } }
     Remove-Item -LiteralPath $stage
   }
 } finally { Pop-Location }

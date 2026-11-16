@@ -1,10 +1,16 @@
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'common.ps1')
+$version = Get-NexPanelVersion
+$zipPath = Join-Path (Split-Path -Parent $PSScriptRoot) (Join-Path 'dist' (Get-NexPanelPackageName -Version $version))
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('distribution-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $testRoot | Out-Null
 $unpacked = Join-Path $testRoot 'package'
-Expand-Archive -LiteralPath dist/nexpanel-0.1.0-windows-x64.zip -DestinationPath $unpacked
+Expand-Archive -LiteralPath $zipPath -DestinationPath $unpacked
 $destination = Join-Path $testRoot 'installed'
+foreach ($f in 'THIRD-PARTY-NOTICES.md','VERSION.txt') { if (-not (Test-Path "$unpacked/$f") -or (Get-Item "$unpacked/$f").Length -eq 0) { throw "Paketdatei fehlt/leer: $f" } }
+if ((Get-Content "$unpacked/VERSION.txt" -Raw).Trim() -ne $version) { throw 'VERSION.txt passt nicht zu Cargo.toml' }
 & "$unpacked/install.ps1" -InstallDirectory $destination -NoShortcut
+if (-not (Test-Path "$destination/THIRD-PARTY-NOTICES.md")) { throw 'Notices nicht installiert' }
 if ((Get-FileHash "$destination/nexpanel.exe").Hash -ne (Get-FileHash target/release/nexpanel.exe).Hash) { throw 'Binary mismatch' }
 $p = Start-Process -FilePath "$destination/nexpanel.exe" -ArgumentList '--help' -Wait -PassThru -WindowStyle Hidden
 if ($p.ExitCode -ne 0) { throw 'Installed binary failed' }
@@ -13,7 +19,7 @@ Set-Content "$destination/unrelated.txt" 'preserve me'
 & "$unpacked/install.ps1" -InstallDirectory $destination -NoShortcut
 & "$destination/uninstall.ps1" -NoShortcut
 if ((Get-Content "$destination/unrelated.txt" -Raw).Trim() -ne 'preserve me' -or (Get-Content "$destination/settings.json" -Raw).Trim() -ne '{"sentinel":true}') { throw 'Preservation failed' }
-if (Test-Path "$destination/nexpanel.exe") { throw 'Uninstall failed' }
+if ((Test-Path "$destination/nexpanel.exe") -or (Test-Path "$destination/THIRD-PARTY-NOTICES.md")) { throw 'Uninstall failed' }
 $refused=$false
 try { & "$unpacked/uninstall.ps1" -NoShortcut } catch { $refused=$true }
 if (-not $refused -or -not (Test-Path "$unpacked/install.ps1")) { throw 'Unmanaged uninstall accepted' }

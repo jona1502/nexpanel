@@ -24,12 +24,12 @@ if ((Test-Path -LiteralPath $destination) -and (Get-ChildItem -LiteralPath $dest
   $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
   if ($marker.product -ne 'NexPanel' -or $marker.directory -ine $destination) { throw 'Installationsmarkierung passt nicht zum Ziel.' }
 }
-$files = @('nexpanel.exe','install.ps1','uninstall.ps1','README.md')
+$files = @('nexpanel.exe','install.ps1','uninstall.ps1','README.md','THIRD-PARTY-NOTICES.md','VERSION.txt')
 foreach ($file in $files) { if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $file) -PathType Leaf)) { throw "Paketdatei fehlt: $file" } }
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 try { foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $destination $file) -Force } }
 catch { throw "Installation fehlgeschlagen. NexPanel bitte schließen und erneut versuchen. $($_.Exception.Message)" }
-@{ product = 'NexPanel'; directory = $destination; version = '0.1.0' } | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
+@{ product = 'NexPanel'; directory = $destination; version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION.txt') -Raw).Trim() } | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
 if (-not $NoShortcut) {
   $shortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'NexPanel.lnk'
   $shell = New-Object -ComObject WScript.Shell
