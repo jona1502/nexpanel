@@ -202,12 +202,8 @@ Vorschau: `nexpanel.exe --capture-preview <Ordner>` speichert jetzt fünf Tabs (
 | Timer-Benachrichtigung anklicken | Öffnet Tab „Zeit“ (Index 2); Tray-Menü „Einstellungen“ öffnet Tab 4 |
 | Lange laufen lassen (> 1 min mit GPU-Last wechselnder Prozesse) | Werte bleiben plausibel (PDH-Neuaufbau alle 10 Messungen), kein Speicher- oder Handle-Wachstum |
 
-## Audio-Liste einklappen (fix/audio-collapse-resize)
+## Feste Panelgröße (fix/audio-collapse-resize)
 
-Das Panel hat feste Größe 392 × 440 (logisch). Einklappen blendet nur die App-Zeilen im Audio-Tab aus.
-
-1. Tab Audio, Kopfzeile (Gerätename oder Pfeil) klicken: App-Liste verschwindet, Panel behält Größe und Position, Pfeil zeigt nach unten.
-2. Kopfzeile erneut klicken: Liste erscheint wieder, Pfeil zeigt nach oben. Mehrfach hintereinander wiederholen.
-3. Bei eingeklappter Liste Tabs Displays, Zeit, System und Einstellungen öffnen: alle in normaler Größe und voll bedienbar.
-4. Eingeklappt lassen, Panel schließen und wieder öffnen: Größe normal, Kopfzeile klappt die Liste wieder auf. Der Zustand wird nicht gespeichert.
-5. `--capture-preview <Ordner>`: `06-audio-eingeklappt.png` ist 392 × 440 mit Kopfzeile oben.
+| Aktion | Erwartung |
+|---|---|
+| Alle Tabs nacheinander öffnen | Audio-Tab hat keine Einklapp-Funktion; Panelgröße bleibt in allen Tabs 392×440 |

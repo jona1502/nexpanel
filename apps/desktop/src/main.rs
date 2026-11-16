@@ -49,8 +49,6 @@ const TAB_TIMER: i32 = 2;
 const TAB_SYSTEM: i32 = 3;
 const TAB_SETTINGS: i32 = 4;
 const TAB_COUNT: usize = 5;
-/// Tab captures plus one extra shot: Audio tab with the app list collapsed.
-const CAPTURE_COUNT: usize = TAB_COUNT + 1;
 /// Fixed logical panel size; must equal the fixed size in `main.slint`.
 #[cfg(test)]
 const PANEL_SIZE: (u32, u32) = (392, 440);
@@ -61,7 +59,6 @@ fn capture_name(tab: usize) -> &'static str {
         "03-zeit.png",
         "04-system.png",
         "05-einstellungen.png",
-        "06-audio-eingeklappt.png",
     ][tab]
 }
 fn apply_system(a: &MainWindow, s: &services::system::SystemSnapshot) {
@@ -986,16 +983,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return;
                     }
                     tab += 1;
-                    if tab == CAPTURE_COUNT {
+                    if tab == TAB_COUNT {
                         let _ = slint::quit_event_loop();
                     } else {
-                        if tab == TAB_COUNT {
-                            // Extra shot: Audio tab collapsed; the window must keep its size.
-                            app.set_apps_open(false);
-                            app.set_tab(1);
-                        } else {
-                            app.set_tab(tab as i32);
-                        }
+                        app.set_tab(tab as i32);
                         next_capture = started.elapsed() + Duration::from_millis(500);
                     }
                 } else {
@@ -1138,8 +1129,8 @@ mod tests {
                 "{p}-height"
             );
         }
-        // The collapsible audio list must stay in the layout (no `if` around it).
-        assert!(!compact.contains("ifroot.apps-open:"));
+        // The audio collapse feature was removed; the property must not come back.
+        assert!(!compact.contains("apps-open"));
     }
     #[test]
     fn tab_constants_match_slint() {
