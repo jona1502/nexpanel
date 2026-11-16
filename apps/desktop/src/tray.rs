@@ -13,6 +13,10 @@ pub enum TrayEvent {
     Toggle,
     /// Context menu "Öffnen".
     Open,
+    /// Context menu "Einstellungen": open the popup on the settings tab.
+    Settings,
+    /// Context menu "Mit Windows starten": flip the autostart setting.
+    ToggleAutostart,
     /// Context menu "Beenden".
     Quit,
     /// User clicked the balloon/toast (`NIN_BALLOONUSERCLICK`).
@@ -48,6 +52,8 @@ const WM_LBUTTONUP: u32 = 0x0202;
 const WM_RBUTTONUP: u32 = 0x0205;
 const ID_OPEN: u32 = 1;
 const ID_QUIT: u32 = 2;
+const ID_SETTINGS: u32 = 3;
+const ID_AUTOSTART: u32 = 4;
 /// Two activations closer than this are one user action (Space can send `NIN_SELECT` and
 /// `NIN_KEYSELECT`).
 const ACTIVATION_GAP_MS: u64 = 120;
@@ -81,6 +87,8 @@ fn decode(v4: bool, lparam: isize) -> Option<Gesture> {
 fn menu_event(id: u32) -> Option<TrayEvent> {
     match id {
         ID_OPEN => Some(TrayEvent::Open),
+        ID_SETTINGS => Some(TrayEvent::Settings),
+        ID_AUTOSTART => Some(TrayEvent::ToggleAutostart),
         ID_QUIT => Some(TrayEvent::Quit),
         _ => None,
     }
@@ -131,7 +139,12 @@ fn anchor_from_wparam(wparam: usize) -> (i32, i32) {
 }
 
 #[cfg(windows)]
-pub use win::{TrayHost, icon_rect, notify};
+pub use win::{TrayHost, icon_rect, notify, tray_pressed};
+
+/// `p` inside `a` (right/bottom exclusive).
+fn contains(a: &crate::platform::Area, p: (i32, i32)) -> bool {
+    p.0 >= a.left && p.0 < a.right && p.1 >= a.top && p.1 < a.bottom
+}
 
 #[cfg(windows)]
 mod win {
@@ -143,6 +156,7 @@ mod win {
             Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
             System::LibraryLoader::GetModuleHandleW,
             UI::{
+                Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON},
                 Shell::{
                     NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
                     NIIF_RESPECT_QUIET_TIME, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
@@ -153,8 +167,9 @@ mod win {
                 WindowsAndMessaging::{
                     AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
                     DestroyIcon, DestroyMenu, DestroyWindow, GWLP_USERDATA, GetCursorPos,
-                    GetWindowLongPtrW, HICON, HMENU, KillTimer, MF_STRING, PostMessageW,
-                    RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
+                    GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, KillTimer, MF_CHECKED,
+                    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
+                    RegisterWindowMessageW, SM_SWAPBUTTON, SetForegroundWindow, SetTimer,
                     SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
                     TPM_RIGHTBUTTON, TrackPopupMenuEx, WM_APP, WM_NULL, WM_TIMER, WNDCLASSW,
                     WS_EX_TOOLWINDOW, WS_POPUP,
@@ -237,6 +252,22 @@ mod win {
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool()
     }
 
+    /// True while the primary mouse button is held with the cursor over the tray icon. Called
+    /// when the popup loses focus: a click on the icon blurs the popup on mouse-down, and the
+    /// toggle only arrives on mouse-up.
+    pub fn tray_pressed() -> bool {
+        let Some(rect) = icon_rect() else {
+            return false;
+        };
+        // SAFETY: plain queries without pointers.
+        let down = unsafe {
+            let swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+            let key = if swapped { VK_RBUTTON } else { VK_LBUTTON };
+            GetAsyncKeyState(key.0 as i32) < 0
+        };
+        down && contains(&rect, cursor())
+    }
+
     /// State shared between `TrayHost` and the window procedure. Boxed, so the address stored
     /// in `GWLP_USERDATA` stays valid for the lifetime of the host.
     struct Shared {
@@ -250,6 +281,7 @@ mod win {
         menu_open: Cell<bool>,
         started: Instant,
         handler: Box<dyn Fn(TrayEvent)>,
+        autostart: Box<dyn Fn() -> bool>,
     }
 
     pub struct TrayHost {
@@ -257,8 +289,12 @@ mod win {
     }
 
     impl TrayHost {
-        /// Must be called on the UI thread; `handler` runs there, from inside the message pump.
-        pub fn new(handler: Box<dyn Fn(TrayEvent)>) -> windows::core::Result<Self> {
+        /// Must be called on the UI thread; `handler` and `autostart` (current autostart state
+        /// for the menu check mark) run there, from inside the message pump.
+        pub fn new(
+            handler: Box<dyn Fn(TrayEvent)>,
+            autostart: Box<dyn Fn() -> bool>,
+        ) -> windows::core::Result<Self> {
             let hicon = create_icon()?;
             // SAFETY: plain call, the name is a NUL terminated literal.
             let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
@@ -273,6 +309,7 @@ mod win {
                 menu_open: Cell::new(false),
                 started: Instant::now(),
                 handler,
+                autostart,
             });
             let hwnd = match create_window() {
                 Ok(hwnd) => hwnd,
@@ -434,7 +471,7 @@ mod win {
             if self.menu_open.replace(true) {
                 return;
             }
-            let command = track_menu(self.hwnd.get(), anchor);
+            let command = track_menu(self.hwnd.get(), anchor, (self.autostart)());
             self.menu_open.set(false);
             if let Some(event) = command.and_then(menu_event) {
                 (self.handler)(event);
@@ -476,11 +513,21 @@ mod win {
     }
 
     /// Shows the native context menu and returns the chosen command id.
-    fn track_menu(host: HWND, anchor: (i32, i32)) -> Option<u32> {
+    fn track_menu(host: HWND, anchor: (i32, i32), autostart: bool) -> Option<u32> {
         // SAFETY: menu is created, used and destroyed in this function; `host` is our window.
         unsafe {
             let menu: HMENU = CreatePopupMenu().ok()?;
+            let check = if autostart { MF_CHECKED } else { MF_UNCHECKED };
             let _ = AppendMenuW(menu, MF_STRING, ID_OPEN as usize, w!("Öffnen"));
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, w!("Einstellungen"));
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING | check,
+                ID_AUTOSTART as usize,
+                w!("Mit Windows starten"),
+            );
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(menu, MF_STRING, ID_QUIT as usize, w!("Beenden"));
             // Required so the menu closes when the user clicks elsewhere.
             let _ = SetForegroundWindow(host);
@@ -600,7 +647,10 @@ mod win {
 pub struct TrayHost;
 #[cfg(not(windows))]
 impl TrayHost {
-    pub fn new(_: Box<dyn Fn(TrayEvent)>) -> Result<Self, std::io::Error> {
+    pub fn new(
+        _: Box<dyn Fn(TrayEvent)>,
+        _: Box<dyn Fn() -> bool>,
+    ) -> Result<Self, std::io::Error> {
         Ok(Self)
     }
 }
@@ -612,6 +662,10 @@ impl TrayHost {
 }
 #[cfg(not(windows))]
 pub fn notify(_: &str, _: &str) -> bool {
+    false
+}
+#[cfg(not(windows))]
+pub fn tray_pressed() -> bool {
     false
 }
 #[cfg(not(windows))]
@@ -684,8 +738,32 @@ mod tests {
     fn menu_ids_map_to_events() {
         assert_eq!(menu_event(ID_OPEN), Some(TrayEvent::Open));
         assert_eq!(menu_event(ID_QUIT), Some(TrayEvent::Quit));
+        assert_eq!(menu_event(ID_SETTINGS), Some(TrayEvent::Settings));
+        assert_eq!(menu_event(ID_AUTOSTART), Some(TrayEvent::ToggleAutostart));
         assert_eq!(menu_event(0), None);
         assert_eq!(menu_event(99), None);
+    }
+    #[test]
+    fn menu_ids_are_distinct_and_nonzero() {
+        let ids = [ID_OPEN, ID_QUIT, ID_SETTINGS, ID_AUTOSTART];
+        for (i, a) in ids.iter().enumerate() {
+            assert_ne!(*a, 0, "0 means no selection");
+            assert!(ids[i + 1..].iter().all(|b| a != b));
+        }
+    }
+    #[test]
+    fn contains_is_half_open() {
+        let a = crate::platform::Area {
+            left: 10,
+            top: 20,
+            right: 30,
+            bottom: 40,
+        };
+        assert!(contains(&a, (10, 20)));
+        assert!(contains(&a, (29, 39)));
+        assert!(!contains(&a, (30, 20)));
+        assert!(!contains(&a, (10, 40)));
+        assert!(!contains(&a, (9, 25)));
     }
     #[test]
     fn activation_filter_collapses_double_notifications() {

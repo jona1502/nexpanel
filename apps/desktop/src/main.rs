@@ -2,6 +2,7 @@
 use nexpanel::{
     config::{Accent, Config},
     platform,
+    popup_state::{Action, Event, Popup},
     services::{self, AudioCommand, DisplayCommand},
     settings_worker::{self, Command},
     time_tools::{Countdown, Stopwatch},
@@ -92,6 +93,18 @@ fn show(app: &MainWindow) {
     platform::hide_from_alt_tab(app.window());
     platform::position(app.window());
     app.window().with_winit_window(|w| w.focus_window());
+}
+/// Feeds `event` to the popup state machine and performs the resulting action.
+fn dispatch(app: &MainWindow, popup: &RefCell<Popup>, event: Event, ms: u64) {
+    let action = popup.borrow_mut().handle(event, ms);
+    match action {
+        Action::Show => show(app),
+        Action::Hide => {
+            let _ = app.hide();
+            popup.borrow_mut().handle(Event::HideDone, ms);
+        }
+        Action::Nothing => {}
+    }
 }
 fn config_from(app: &MainWindow) -> Config {
     Config {
@@ -212,9 +225,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Rows the user is currently changing ignore worker values for a short time.
     let display_hold = Rc::new(RefCell::new(LocalHold::default()));
     let audio_hold = Rc::new(RefCell::new(LocalHold::default()));
-    let last_blur = Rc::new(Cell::new(None::<Instant>));
+    let popup = Rc::new(RefCell::new(Popup::new()));
+    let started = Instant::now();
+    let ms = move || started.elapsed().as_millis() as u64;
     let weak = app.as_weak();
-    let blur = last_blur.clone();
+    let blur_popup = popup.clone();
     app.window().on_winit_window_event(move |window, event| {
         match event {
             winit::event::WindowEvent::Focused(false) => {
@@ -223,8 +238,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && app.get_focus_close()
                     && app.window().is_visible()
                 {
-                    blur.set(Some(Instant::now()));
-                    let _ = window.hide();
+                    let tray_pressed = tray::tray_pressed();
+                    let action = blur_popup
+                        .borrow_mut()
+                        .handle(Event::Blur { tray_pressed }, ms());
+                    if action == Action::Hide {
+                        let _ = window.hide();
+                        blur_popup.borrow_mut().handle(Event::HideDone, ms());
+                    }
                 }
             }
             winit::event::WindowEvent::KeyboardInput { event, .. }
@@ -232,7 +253,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && event.logical_key
                         == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) =>
             {
+                let mut popup = blur_popup.borrow_mut();
+                popup.handle(Event::Esc, ms());
                 let _ = window.hide();
+                popup.handle(Event::HideDone, ms());
                 return EventResult::PreventDefault;
             }
             winit::event::WindowEvent::ScaleFactorChanged { .. } => {
@@ -250,18 +274,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     app.window().on_close_requested({
         let weak = app.as_weak();
+        let popup = popup.clone();
         move || {
             if let Some(app) = weak.upgrade() {
-                let _ = app.hide();
+                dispatch(&app, &popup, Event::Esc, ms());
             }
             slint::CloseRequestResponse::KeepWindowShown
         }
     });
     app.on_hide_panel({
         let weak = app.as_weak();
+        let popup = popup.clone();
         move || {
             if let Some(app) = weak.upgrade() {
-                let _ = app.hide();
+                dispatch(&app, &popup, Event::Esc, ms());
             }
         }
     });
@@ -270,41 +296,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tray = if capture_mode {
         None
     } else {
-        Some(tray::TrayHost::new(Box::new({
-            let weak = app.as_weak();
-            let timer_check = timer_check.clone();
-            move |event| {
-                let Some(app) = weak.upgrade() else {
-                    return;
-                };
-                match event {
-                    TrayEvent::Toggle if app.window().is_visible() => {
-                        let _ = app.hide();
-                    }
-                    TrayEvent::Toggle => {
-                        if last_blur
-                            .get()
-                            .is_none_or(|t| t.elapsed() > Duration::from_millis(250))
-                        {
-                            show(&app);
+        Some(tray::TrayHost::new(
+            Box::new({
+                let weak = app.as_weak();
+                let popup = popup.clone();
+                let timer_check = timer_check.clone();
+                move |event| {
+                    let Some(app) = weak.upgrade() else {
+                        return;
+                    };
+                    match event {
+                        TrayEvent::Toggle => dispatch(&app, &popup, Event::TrayToggle, ms()),
+                        TrayEvent::Open => dispatch(&app, &popup, Event::TrayOpen, ms()),
+                        TrayEvent::Settings => {
+                            app.set_tab(3);
+                            dispatch(&app, &popup, Event::TrayOpen, ms());
                         }
-                    }
-                    TrayEvent::Open => show(&app),
-                    TrayEvent::NotificationClicked => {
-                        app.set_tab(2);
-                        show(&app);
-                    }
-                    TrayEvent::Resumed => {
-                        if let Some(check) = timer_check.borrow().as_ref() {
-                            check();
+                        TrayEvent::ToggleAutostart => {
+                            // Same path as the checkbox in the settings tab.
+                            app.set_autostart(!app.get_autostart());
+                            app.invoke_save_settings();
                         }
-                    }
-                    TrayEvent::Quit => {
-                        let _ = slint::quit_event_loop();
+                        TrayEvent::NotificationClicked => {
+                            app.set_tab(2);
+                            dispatch(&app, &popup, Event::ShowRequested, ms());
+                        }
+                        TrayEvent::Resumed => {
+                            if let Some(check) = timer_check.borrow().as_ref() {
+                                check();
+                            }
+                        }
+                        TrayEvent::Quit => {
+                            let _ = slint::quit_event_loop();
+                        }
                     }
                 }
-            }
-        }))?)
+            }),
+            Box::new({
+                let weak = app.as_weak();
+                move || weak.upgrade().is_some_and(|app| app.get_autostart())
+            }),
+        )?)
     };
     app.on_refresh_display({
         let tx = dtx.clone();
@@ -459,6 +491,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ready = Rc::new(Cell::new((false, false)));
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
+    let tick_popup = popup.clone();
     let mut visible = None;
     let mut crash_shown = (false, false);
     tick.start(
@@ -526,7 +559,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             #[cfg(windows)]
             if instance.as_ref().is_some_and(|i| i.open_requested()) {
-                show(&a);
+                dispatch(&a, &tick_popup, Event::ShowRequested, ms());
             }
             update_timers(&a, &countdown, &stopwatch, &drift);
             let active = a.window().is_visible();
@@ -538,7 +571,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
     if mode != Mode::Normal(true) {
-        show(&app);
+        dispatch(&app, &popup, Event::ShowRequested, ms());
     }
     let capture_error = Rc::new(RefCell::new(None::<String>));
     let capture_timer = slint::Timer::default();
