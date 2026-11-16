@@ -36,13 +36,13 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 
 ## P2 – Verbesserungen
 
-- [ ] Position vor `show()` setzen, um ein Flackern beim ersten Frame zu vermeiden.
-- [ ] Idle-Wakeups reduzieren: Der 200-ms-Tick läuft auch bei verborgenem Panel. Mutexname ohne Version.
+- [x] Position vor `show()` setzen, um ein Flackern beim ersten Frame zu vermeiden.
+- [ ] Idle-Wakeups reduzieren: Der 200-ms-Tick läuft auch bei verborgenem Panel.
 - [ ] Hotplug über `WM_DISPLAYCHANGE` statt 4-s-Polling erkennen.
-- [ ] `StartupApproved` auswerten, `deny_unknown_fields` lockern, vor dem Reset ein Backup der korrupten Datei anlegen.
-- [ ] Esc soll offene ComboBox-Popups schließen, nicht das ganze Panel.
-- [ ] Tray-Icon in mehreren Größen bereitstellen (16/20/24/32).
-- [ ] Display- und Audio-Worker beim Beenden joinen.
+- [x] `StartupApproved` auswerten, `deny_unknown_fields` lockern, vor dem Reset ein Backup der korrupten Datei anlegen.
+- [ ] Esc soll offene ComboBox-Popups schließen, nicht das ganze Panel. (Nicht umgesetzt: Popup-Zustand nicht abfragbar, siehe docs/testing.md.)
+- [ ] Tray-Icon in mehreren Größen (16/20/24/32): Assets `tray-<px>.png` und `platform::pick_icon_size` vorhanden; Einbindung in `tray.rs` offen.
+- [x] Display- und Audio-Worker beim Beenden joinen.
 - [ ] Integrationstests ergänzen.
 
 ## Messdaten

@@ -13,7 +13,8 @@ pub enum Accent {
     Orange,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+// Unknown fields are ignored so a downgrade does not block on newer settings files.
+#[serde(default)]
 pub struct Config {
     pub accent: Accent,
     pub animations: bool,
@@ -57,6 +58,27 @@ pub fn load(path: &Path) -> io::Result<Config> {
     config.validate()?;
     Ok(config)
 }
+/// Copy a damaged settings file to `settings.corrupt-<unix-ts>.json` next to it.
+/// Returns `None` if there is nothing to back up.
+pub fn backup_corrupt(path: &Path) -> io::Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let stem = path
+        .file_stem()
+        .map_or_else(|| "settings".into(), |s| s.to_string_lossy().into_owned());
+    let mut target = path.with_file_name(format!("{stem}.corrupt-{ts}.json"));
+    let mut n = 1;
+    while target.exists() {
+        target = path.with_file_name(format!("{stem}.corrupt-{ts}-{n}.json"));
+        n += 1;
+    }
+    std::fs::copy(path, &target)?;
+    Ok(Some(target))
+}
 /// Explicit save also serves as the user's deliberate reset of a damaged file.
 pub fn save(path: &Path, config: &Config) -> io::Result<()> {
     config.validate()?;
@@ -94,6 +116,32 @@ mod tests {
         };
         save(&path, &config).unwrap();
         assert_eq!(load(&path).unwrap(), config);
+    }
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"autostart":true,"future_option":1}"#).unwrap();
+        let config = load(&path).unwrap();
+        assert!(config.autostart);
+    }
+    #[test]
+    fn backup_copies_corrupt_file_without_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(backup_corrupt(&path).unwrap(), None);
+        std::fs::write(&path, b"broken").unwrap();
+        let a = backup_corrupt(&path).unwrap().unwrap();
+        let b = backup_corrupt(&path).unwrap().unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read(&a).unwrap(), b"broken");
+        assert!(
+            a.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("settings.corrupt-")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"broken");
     }
     #[test]
     fn corrupt_or_unknown_settings_are_preserved_and_reported() {

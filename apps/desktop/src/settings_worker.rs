@@ -147,6 +147,19 @@ fn save_file(
             "Beschädigte Einstellungen erfordern ausdrückliches Zurücksetzen",
         ));
     }
+    if reset && blocked {
+        match config::backup_corrupt(path) {
+            Ok(Some(backup)) => {
+                log::info!("Beschädigte Einstellungen gesichert: {}", backup.display())
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(std::io::Error::other(format!(
+                    "Sicherung der beschädigten Datei fehlgeschlagen: {e}"
+                )));
+            }
+        }
+    }
     config::save(path, value)
 }
 #[cfg(test)]
@@ -175,6 +188,16 @@ mod tests {
         assert!(save_file(&path, &Config::default(), true, false).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"damaged configuration");
         save_file(&path, &Config::default(), true, true).unwrap();
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read(&backups[0]).unwrap(),
+            b"damaged configuration"
+        );
         assert_eq!(config::load(&path).unwrap(), Config::default());
     }
     #[test]

@@ -83,6 +83,11 @@ fn clock(ms: u64) -> slint::SharedString {
     format!("{:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60).into()
 }
 fn show(app: &MainWindow) {
+    // Once the native window exists (every show after the first), place it
+    // before it becomes visible so no frame appears at the old position. On the
+    // first show Slint creates the window lazily, so position() is a no-op
+    // there and the call after show() applies it.
+    platform::position(app.window());
     let _ = app.show();
     platform::hide_from_alt_tab(app.window());
     platform::position(app.window());
@@ -608,6 +613,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(capture_timer);
     let _ = shutdown_display.send(DisplayCommand::Shutdown);
     let _ = shutdown_audio.send(AudioCommand::Shutdown);
+    // Display and audio workers: wait briefly so COM/DDC handles are released.
+    nexpanel::logging::join_workers(Duration::from_secs(1));
     let _ = stx.send(Command::Shutdown);
     let settings_result = settings_thread
         .join()
