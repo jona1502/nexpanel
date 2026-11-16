@@ -142,3 +142,17 @@ Panel ist 392 x 440 px (vorher 400 x 620). Vorschau ohne Hardwarezugriff: `nexpa
 | Eingabe 9 0 (00:00:90), Enter | Start; Anzeige normalisiert auf 00:01:30 |
 | Während der Countdown läuft oder pausiert | Große Anzeige zeigt Restzeit (HH:MM:SS), nicht editierbar; „Zurücksetzen“ macht das Feld wieder editierbar |
 | Esc im Zeitfeld | Esc schließt weiterhin das Panel (wird vor Slint behandelt, nicht abgefangen) |
+
+## Manuell: Tray und Popup-Robustheit (fix/tray-popup-robustness)
+
+| Test | Erwartung |
+|---|---|
+| Panel offen, schneller Doppelklick (< 100 ms) auf das Tray-Icon | Panel endet geschlossen (beide Klicks zählen) |
+| Leertaste/Enter auf fokussiertem Tray-Icon | Genau ein Toggle (NIN_SELECT/NIN_KEYSELECT werden zusammengefasst) |
+| Fokusassistent (Nicht stören) an, Countdown ablaufen lassen | Piepton bzw. Hinweis; beim nächsten Öffnen steht das Panel auf dem Timer-Tab mit Banner "Dein Timer ist abgelaufen" |
+| Panel per Tray-Klick öffnen, Fokus sofort anderswohin legen (z. B. Explorer aktivieren), ohne dass Blur ankommt | Panel schließt spätestens nach ca. 0,4 s; Esc und Klick daneben schließen es sonst weiterhin |
+| Maustaste auf Tray-Icon drücken, Panel schließt per Blur, Maus außerhalb des Icons loslassen, dann innerhalb 5 s auf das Icon klicken | Panel oeffnet sich beim ersten Klick (kein verschluckter Klick) |
+| Panel von aussen verbergen (z. B. Fenster per Tool ausblenden), dann Tray-Klick | Panel oeffnet sich mit einem Klick |
+| Standby/Ruhezustand während ein Countdown abläuft, Resume | Kein Absturz; Timer-Ablauf wird gemeldet |
+| Autostart-Haken im Tray-Menü direkt nach dem Start (bevor Einstellungen geladen sind) | Keine Änderung, kein falscher Haken |
+| Start mit gesperrtem Fenster-Backend/ohne Tray (Fehlerfall) | Fehlerdialog "NexPanel – Start fehlgeschlagen" und Logeintrag statt stillem Beenden |
