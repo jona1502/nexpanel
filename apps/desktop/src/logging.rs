@@ -21,7 +21,7 @@ pub type CrashFlag = Arc<AtomicBool>;
 
 struct FileLogger {
     level: LevelFilter,
-    file: Mutex<Option<LineWriter<File>>>,
+    file: Mutex<Option<LogFile>>,
     stderr: bool,
 }
 
@@ -51,14 +51,67 @@ impl Log for FileLogger {
         }
         let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(file) = guard.as_mut() {
-            let _ = writeln!(file, "{line}");
+            file.write_line(&line);
         }
     }
     fn flush(&self) {
         let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(file) = guard.as_mut() {
-            let _ = file.flush();
+            file.flush();
         }
+    }
+}
+
+/// Open log file that rotates itself once more than `max` bytes were written.
+struct LogFile {
+    writer: Option<LineWriter<File>>,
+    dir: PathBuf,
+    written: u64,
+    max: u64,
+}
+
+impl LogFile {
+    fn open(dir: &Path, max: u64) -> std::io::Result<Self> {
+        let file = open_log(dir)?;
+        let written = file.metadata().map_or(0, |m| m.len());
+        Ok(Self {
+            writer: Some(LineWriter::new(file)),
+            dir: dir.to_path_buf(),
+            written,
+            max,
+        })
+    }
+    fn write_line(&mut self, line: &str) {
+        if self.written > self.max {
+            self.rotate();
+        }
+        if let Some(writer) = self.writer.as_mut()
+            && writeln!(writer, "{line}").is_ok()
+        {
+            self.written += line.len() as u64 + 1;
+        }
+    }
+    fn flush(&mut self) {
+        if let Some(writer) = self.writer.as_mut() {
+            let _ = writer.flush();
+        }
+    }
+    /// Close the handle first (rename of an open file is not reliable), move the log
+    /// to `nexpanel.old.log` and reopen a fresh one. Failure leaves logging disabled.
+    fn rotate(&mut self) {
+        self.flush();
+        self.writer = None;
+        let path = self.dir.join(LOG_NAME);
+        let old = self.dir.join(OLD_LOG_NAME);
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::rename(&path, &old);
+        self.written = 0;
+        self.writer = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()
+            .map(LineWriter::new);
     }
 }
 
@@ -143,11 +196,11 @@ fn open_log(dir: &Path) -> std::io::Result<File> {
 
 /// Install logger and panic hook. Later calls are ignored.
 pub fn init() {
-    let file = log_dir().and_then(|dir| open_log(&dir).ok());
+    let file = log_dir().and_then(|dir| LogFile::open(&dir, MAX_LOG_BYTES).ok());
     let env = std::env::var("NEXPANEL_LOG").ok();
     let logger = LOGGER.get_or_init(|| FileLogger {
         level: effective_level(env.as_deref()),
-        file: Mutex::new(file.map(LineWriter::new)),
+        file: Mutex::new(file),
         stderr: cfg!(debug_assertions),
     });
     if log::set_logger(logger).is_err() {
@@ -275,6 +328,30 @@ mod tests {
         assert_eq!(
             std::fs::metadata(dir.path().join(LOG_NAME)).unwrap().len(),
             0
+        );
+    }
+
+    #[test]
+    fn rotates_while_running_past_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = LogFile::open(dir.path(), 20).unwrap();
+        log.write_line("0123456789"); // 11 bytes
+        log.write_line("0123456789"); // 22 bytes, over the limit now
+        assert!(!dir.path().join(OLD_LOG_NAME).exists());
+        log.write_line("neu"); // rotates first
+        log.flush();
+        let old = std::fs::read_to_string(dir.path().join(OLD_LOG_NAME)).unwrap();
+        assert_eq!(
+            old,
+            "0123456789
+0123456789
+"
+        );
+        let current = std::fs::read_to_string(dir.path().join(LOG_NAME)).unwrap();
+        assert_eq!(
+            current,
+            "neu
+"
         );
     }
 
