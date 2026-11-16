@@ -2,7 +2,7 @@ import { AboutCard } from "about.slint";
 import { ThinSlider } from "thin_slider.slint";
 import { Button, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
-export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string }
+export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool }
 component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
 component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
 component Card inherits Rectangle { background:#252832; border-radius:8px; }
@@ -42,10 +42,11 @@ component MonitorIcon inherits Rectangle {
 }
 // App icon (real icon when available), otherwise a rounded square with the first letter.
 component AppIcon inherits Rectangle {
- in property<string> letter; in property<bool> muted;
+ in property<string> letter; in property<bool> muted; in property<image> icon; in property<bool> has-icon;
  callback clicked();
  width:28px; height:28px; border-radius:6px; background:ta.has-hover?#2a2d38:transparent;
- Rectangle{width:24px;height:24px;border-radius:5px;background:#343640;opacity:root.muted?0.4:1;
+ if root.has-icon: Image{source:root.icon;width:24px;height:24px;opacity:root.muted?0.4:1;}
+ if !root.has-icon: Rectangle{width:24px;height:24px;border-radius:5px;background:#343640;opacity:root.muted?0.4:1;
   Text{text:root.letter;color:#e6e7ee;font-size:13px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}}
  if root.muted: Path{x:root.width - 13px;y:root.height - 13px;width:10px;height:10px;viewbox-width:10;viewbox-height:10;fill:transparent;stroke:#ff8f8f;stroke-width:1.6px;commands:"M1 1 L9 9 M9 1 L1 9";}
  ta := TouchArea{mouse-cursor:pointer;clicked=>{root.clicked();}}
@@ -122,7 +123,7 @@ export component MainWindow inherits Window {
  VerticalLayout {alignment:start;padding-top:4px;padding-bottom:4px;
  for row in root.audio: Rectangle {height:row.master?0px:36px;visible:!row.master;
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
- Rectangle{width:28px;AppIcon{letter:row.initial;muted:row.muted;clicked=>{root.mute(row.id,!row.muted);}}}
+ Rectangle{width:28px;AppIcon{letter:row.initial;icon:row.icon;has-icon:row.has-icon;muted:row.muted;clicked=>{root.mute(row.id,!row.muted);}}}
  ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
  Text{width:36px;text:row.value;color:row.muted?#8a8d99:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
@@ -147,14 +148,13 @@ export component MainWindow inherits Window {
  Rectangle {background:#13151a;border-radius:8px;
  VerticalLayout {padding-top:4px;padding-bottom:4px;spacing:0px;
  for row in root.displays: VerticalLayout {spacing:0px;
- if root.displays.length>1: Text{text:row.name;color:#979eaf;font-size:11px;overflow:elide;height:16px;x:42px;}
+ if root.displays.length>1||!row.supported: Text{text:row.supported?row.name:row.name+" · "+row.status;color:#979eaf;font-size:11px;overflow:elide;height:16px;x:42px;}
  Rectangle {height:36px;opacity:row.supported?1:0.45;
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
- MonitorIcon{width:24px;height:24px;y:6px;tint:#e6e7ee;}
+ Rectangle{width:28px;MonitorIcon{width:24px;height:24px;}}
  ThinSlider{horizontal-stretch:1;value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
  Text{width:36px;text:row.supported?row.value:"—";color:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
- if !row.supported && row.status!="": Text{text:row.status;color:#979eaf;font-size:11px;wrap:word-wrap;x:42px;}
  }
  }
  }

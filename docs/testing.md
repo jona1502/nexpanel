@@ -112,3 +112,27 @@ Get-Counter "\Process($($p.ProcessName))\% Processor Time" -SampleInterval 5 -Ma
 
 - Vergleich: Stand `feat/logging` (200-ms-Tick ohne Unterbrechung, Display-Worker mit 100-ms-Wakeup) gegen diesen Branch, jeweils Panel verborgen und ohne Timer.
 
+
+## Manuell: kompaktes UI, Audio-Icons, Zeitfeld (feat/audio-compact-ui)
+
+Panel ist 392 x 440 px (vorher 400 x 620). Vorschau ohne Hardwarezugriff: `nexpanel.exe --capture-preview <Ordner>`.
+
+| Prüfung | Erwartung |
+| --- | --- |
+| Audio-Tab öffnen | Kopfzeile mit Name des Standardgeräts (Fallback „Lautstärke“) und Pfeil rechts; Pfeil klappt die App-Liste ein/aus |
+| Master-Zeile | Lautsprecher-Icon links, dünner Slider, große Zahl rechts; keine „Stumm“-Checkbox |
+| Klick auf Lautsprecher-Icon (ganze 32-px-Fläche, Hover-Highlight) | Master stumm: Icon mit Kreuz, Slider und Zahl gedimmt; erneuter Klick hebt auf |
+| Klick auf App-Icon (28-px-Fläche, Hover-Highlight) | App stumm: Icon gedimmt mit rotem x, Slider und Zahl gedimmt; Slider bleibt ziehbar |
+| Mute nur über Icons | Nirgends Checkbox oder Button für Stumm im Audio-Tab |
+| App-Icons | Echte Exe-Icons; Systemsounds/Store-Apps/ohne Zugriff: Kachel mit Anfangsbuchstabe |
+| Slider ziehen (Audio, Display) | Wert folgt der Maus ohne Zucken, Zahl rechts aktualisiert; nach Loslassen kein Zurückspringen innerhalb 1,5 s |
+| Klick auf die Spur | Thumb springt an die Position |
+| Viele Sitzungen (> 7) | App-Liste scrollt, Master bleibt sichtbar |
+| Display-Tab | Kopfzeile (Koppeln-Chip, Refresh-Icon), eine Zeile je Monitor: Monitor-Icon, Slider, Zahl; Beschriftung mit Namen nur bei mehr als einem Monitor; nicht regelbar: gedimmt, „—“, Grund in der Beschriftung |
+| Koppeln-Chip | Schaltet verbundene Helligkeit; Zustand bleibt nach Neustart (Einstellungen) |
+| Zeit-Tab: Ziffern 1, 5, 3 tippen | 00:00:01 → 00:00:15 → 00:01:53 |
+| Rücktaste / Entf | Letzte Ziffer entfernen / alles auf 00:00:00 |
+| Pfeil auf/ab, Mausrad über Segment | Segment +/- 1 mit Übertrag; Pfeil links/rechts wechselt das Segment; Klick fokussiert das Segment |
+| Eingabe 9 0 (00:00:90), Enter | Start; Anzeige normalisiert auf 00:01:30 |
+| Während der Countdown läuft oder pausiert | Große Anzeige zeigt Restzeit (HH:MM:SS), nicht editierbar; „Zurücksetzen“ macht das Feld wieder editierbar |
+| Esc im Zeitfeld | Esc schließt weiterhin das Panel (wird vor Slint behandelt, nicht abgefangen) |

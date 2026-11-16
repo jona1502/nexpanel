@@ -1,5 +1,5 @@
 //! Core Audio interfaces never leave their owning worker thread.
-use super::{AudioChange, AudioCommand, AudioRow, AudioSnapshot};
+use super::{AppIcon, AudioChange, AudioCommand, AudioRow, AudioSnapshot};
 use std::{
     collections::BTreeMap,
     sync::mpsc::{self, Receiver, Sender},
@@ -13,6 +13,7 @@ struct Member<T> {
     name: String,
     volume: u8,
     muted: bool,
+    icon: Option<AppIcon>,
     control: T,
 }
 struct Group<T> {
@@ -40,6 +41,7 @@ fn groups<T>(endpoint: &str, members: Vec<Member<T>>) -> Vec<Group<T>> {
                 },
                 volume: 0,
                 muted: true,
+                icon: None,
             },
             members: vec![],
         });
@@ -49,6 +51,9 @@ fn groups<T>(endpoint: &str, members: Vec<Member<T>>) -> Vec<Group<T>> {
         }
         group.row.volume = group.row.volume.max(normalized(member.volume));
         group.row.muted &= member.muted;
+        if group.row.icon.is_none() {
+            group.row.icon = member.icon.clone();
+        }
         group.members.push(member);
     }
     grouped
@@ -348,6 +353,10 @@ mod native {
         Win32::{
             Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
             Foundation::{CloseHandle, HANDLE, PROPERTYKEY, S_OK},
+            Graphics::Gdi::{
+                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC,
+                GetDIBits, GetObjectW, HBITMAP, HDC, ReleaseDC,
+            },
             Media::Audio::{
                 Endpoints::{
                     IAudioEndpointVolume, IAudioEndpointVolumeCallback,
@@ -355,12 +364,17 @@ mod native {
                 },
                 *,
             },
+            Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES,
             System::{
                 Com::{
                     StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
                     *,
                 },
                 Threading::*,
+            },
+            UI::{
+                Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW},
+                WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO},
             },
         },
         core::{Interface, PCWSTR, PWSTR, Ref, implement},
@@ -411,7 +425,7 @@ mod native {
             text
         }
     }
-    fn process_name(pid: u32) -> Option<String> {
+    fn process_path(pid: u32) -> Option<String> {
         let process =
             Process(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
         let mut buffer = vec![0u16; 32768];
@@ -425,10 +439,145 @@ mod native {
             )
         }
         .ok()?;
-        let path = String::from_utf16_lossy(&buffer[..length as usize]);
+        Some(String::from_utf16_lossy(&buffer[..length as usize]))
+    }
+    fn process_name(pid: u32) -> Option<String> {
+        let path = process_path(pid)?;
         std::path::Path::new(&path)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
+    }
+
+    /// Owned GDI bitmap, deleted on drop.
+    struct Bitmap(HBITMAP);
+    impl Drop for Bitmap {
+        fn drop(&mut self) {
+            if !self.0.is_invalid() {
+                let _ = unsafe { DeleteObject(self.0.into()) };
+            }
+        }
+    }
+    /// Owned icon handle, destroyed on drop.
+    struct Icon(HICON);
+    impl Drop for Icon {
+        fn drop(&mut self) {
+            let _ = unsafe { DestroyIcon(self.0) };
+        }
+    }
+    /// Screen DC, released on drop.
+    struct ScreenDc(HDC);
+    impl Drop for ScreenDc {
+        fn drop(&mut self) {
+            unsafe { ReleaseDC(None, self.0) };
+        }
+    }
+    /// Reads a bitmap as top-down 32-bit BGRA.
+    fn bitmap_bgra(dc: HDC, bitmap: HBITMAP, width: i32, height: i32) -> Option<Vec<u8>> {
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        };
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        let lines = unsafe {
+            GetDIBits(
+                dc,
+                bitmap,
+                0,
+                height as u32,
+                Some(pixels.as_mut_ptr().cast()),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        };
+        (lines == height).then_some(pixels)
+    }
+    /// Extracts the shell icon of an executable as RGBA8; None on any failure.
+    fn extract_icon(path: &str, key: u64) -> Option<AppIcon> {
+        let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let mut info = SHFILEINFOW::default();
+        let result = unsafe {
+            SHGetFileInfoW(
+                PCWSTR(wide.as_ptr()),
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                Some(&mut info),
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_ICON | SHGFI_LARGEICON,
+            )
+        };
+        if result == 0 || info.hIcon.is_invalid() {
+            return None;
+        }
+        let icon = Icon(info.hIcon);
+        let mut icon_info = ICONINFO::default();
+        unsafe { GetIconInfo(icon.0, &mut icon_info) }.ok()?;
+        let color = Bitmap(icon_info.hbmColor);
+        let mask = Bitmap(icon_info.hbmMask);
+        if color.0.is_invalid() {
+            return None; // monochrome icon, not worth special handling
+        }
+        let mut bm = BITMAP::default();
+        let got = unsafe {
+            GetObjectW(
+                color.0.into(),
+                std::mem::size_of::<BITMAP>() as i32,
+                Some((&mut bm as *mut BITMAP).cast()),
+            )
+        };
+        let (w, h) = (bm.bmWidth, bm.bmHeight);
+        if got == 0 || !(1..=128).contains(&w) || !(1..=128).contains(&h) {
+            return None;
+        }
+        let dc = ScreenDc(unsafe { GetDC(None) });
+        if dc.0.is_invalid() {
+            return None;
+        }
+        let mut pixels = bitmap_bgra(dc.0, color.0, w, h)?;
+        if pixels.chunks_exact(4).all(|p| p[3] == 0) {
+            // Icon without alpha channel: opaque wherever the AND mask is 0.
+            let mask_px = if mask.0.is_invalid() {
+                None
+            } else {
+                bitmap_bgra(dc.0, mask.0, w, h)
+            };
+            for (i, p) in pixels.chunks_exact_mut(4).enumerate() {
+                let transparent = mask_px.as_ref().is_some_and(|m| m[i * 4] != 0);
+                p[3] = if transparent { 0 } else { 255 };
+            }
+        }
+        for p in pixels.chunks_exact_mut(4) {
+            p.swap(0, 2); // BGRA -> RGBA
+        }
+        Some(AppIcon {
+            key,
+            width: w as u32,
+            height: h as u32,
+            rgba: pixels.into(),
+        })
+    }
+    thread_local! {
+        /// Per exe path; failures are cached too so a broken icon is not retried on every refresh.
+        static ICONS: std::cell::RefCell<HashMap<String, Option<AppIcon>>> = Default::default();
+    }
+    fn app_icon(pid: u32) -> Option<AppIcon> {
+        let path = process_path(pid)?;
+        ICONS.with(|cache| {
+            cache
+                .borrow_mut()
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    path.to_lowercase().hash(&mut hasher);
+                    extract_icon(&path, hasher.finish())
+                })
+                .clone()
+        })
     }
 
     // Callbacks run on foreign COM threads. They only send a tiny message to the
@@ -604,6 +753,7 @@ mod native {
                         name: "Standardausgabegerät".into(),
                         volume: 0,
                         muted: false,
+                        icon: None,
                     },
                     id,
                     endpoint,
@@ -691,6 +841,7 @@ mod native {
                                 name,
                                 volume: percent(volume.GetMasterVolume()?),
                                 muted: volume.GetMute()?.as_bool(),
+                                icon: if system { None } else { app_icon(pid) },
                                 control: volume,
                             },
                             control,
@@ -937,6 +1088,7 @@ mod tests {
             name: "App".into(),
             volume,
             muted,
+            icon: None,
             control: (),
         }
     }
@@ -991,6 +1143,7 @@ mod tests {
             name: "App".into(),
             volume: 1,
             muted: false,
+            icon: None,
             control: Cell::new((1u8, false)),
         };
         let g = groups("e", vec![make("a"), make("b")]);
@@ -1062,6 +1215,7 @@ mod tests {
             name: "App".into(),
             volume: 20,
             muted: false,
+            icon: None,
             control: Cell::new(20u8),
         };
         let mut current = groups("e", vec![make("a"), make("b")]);
@@ -1111,6 +1265,7 @@ mod tests {
                 name: "Master".into(),
                 volume: 20,
                 muted: false,
+                icon: None,
             }),
             ..Default::default()
         };
@@ -1235,6 +1390,7 @@ mod tests {
                 name: "M".into(),
                 volume: 5,
                 muted: false,
+                icon: None,
             }),
             ..Default::default()
         };

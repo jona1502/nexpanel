@@ -122,7 +122,10 @@ mod tests {
         assert_eq!(t.step(1, 1).text(), "00:01:59");
         assert_eq!(t.step(0, 1).text(), "01:00:59");
         assert_eq!(TimeInput::default().step(2, -1).text(), "00:00:00");
-        assert_eq!(TimeInput::from_seconds(86_399).step(2, 5).text(), "24:00:00");
+        assert_eq!(
+            TimeInput::from_seconds(86_399).step(2, 5).text(),
+            "24:00:00"
+        );
         assert_eq!(t.step(9, 1).text(), "00:01:00");
     }
 

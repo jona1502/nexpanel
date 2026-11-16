@@ -115,6 +115,25 @@ fn update_timers(
     a.set_stopwatch_text(clock(s.elapsed_ms(t)));
     a.set_stopwatch_running(s.is_running());
 }
+thread_local! {
+    /// Slint images per icon key; built once on the UI thread, never touched elsewhere.
+    static ICON_IMAGES: RefCell<std::collections::HashMap<u64, slint::Image>> = Default::default();
+}
+fn slint_icon(icon: &services::AppIcon) -> slint::Image {
+    ICON_IMAGES.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(icon.key)
+            .or_insert_with(|| {
+                slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                    &icon.rgba,
+                    icon.width,
+                    icon.height,
+                ))
+            })
+            .clone()
+    })
+}
 fn show_input(a: &MainWindow, t: TimeInput) {
     let (h, m, s) = t.segments();
     a.set_input_h(format!("{h:02}").into());
@@ -636,19 +655,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     s.device.into()
                 });
-                let to_item = |r: services::AudioRow, master: bool| AudioItem {
-                    initial: r
-                        .name
-                        .chars()
-                        .next()
-                        .map(|c| c.to_uppercase().collect::<String>())
-                        .unwrap_or_else(|| "?".into())
-                        .into(),
-                    id: r.id.into(),
-                    name: r.name.into(),
-                    value: r.volume as i32,
-                    muted: r.muted,
-                    master,
+                let to_item = |r: services::AudioRow, master: bool| {
+                    let icon = r.icon.as_ref().map(slint_icon);
+                    AudioItem {
+                        initial: r
+                            .name
+                            .chars()
+                            .next()
+                            .map(|c| c.to_uppercase().collect::<String>())
+                            .unwrap_or_else(|| "?".into())
+                            .into(),
+                        id: r.id.into(),
+                        name: r.name.into(),
+                        value: r.volume as i32,
+                        muted: r.muted,
+                        master,
+                        has_icon: icon.is_some(),
+                        icon: icon.unwrap_or_default(),
+                    }
                 };
                 let mut rows: Vec<_> = s
                     .master
