@@ -33,7 +33,7 @@ Konfiguration: `%LOCALAPPDATA%\NexPanel\settings.json`. Fehlende Datei lädt Def
 ./scripts/package.ps1 -SkipBuild
 ```
 
-Standardmäßig läuft `cargo build -p nexpanel --release --locked`. Ausgabe: `dist/nexpanel-0.1.0-windows-x64.zip` und `.zip.sha256`. Das ZIP enthält exe, Installations-/Deinstallationsskript und deutsche Anleitung. SHA256 des ZIP mit `Get-FileHash -Algorithm SHA256` vergleichen. Die Prüfsumme erkennt Übertragungsfehler, ersetzt aber keine vertrauenswürdige Herkunft oder Signatur.
+Standardmäßig läuft `cargo build -p nexpanel --release --locked`. Ausgabe: `dist/nexpanel-<Version>-windows-x64.zip` und `.zip.sha256` (Version aus `apps/desktop/Cargo.toml`). Das ZIP enthält exe, `THIRD-PARTY-NOTICES.md`, `VERSION.txt`, Installations-/Deinstallationsskript und deutsche Anleitung. SHA256 des ZIP mit `Get-FileHash -Algorithm SHA256` vergleichen. Die Prüfsumme erkennt Übertragungsfehler, ersetzt aber keine vertrauenswürdige Herkunft oder Signatur.
 
 ZIP in einen eigenen Ordner entpacken, PowerShell dort öffnen:
 
