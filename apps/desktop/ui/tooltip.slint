@@ -1,0 +1,73 @@
+// Hover tooltips. Slint has no tooltip for custom elements, so the window draws one overlay
+// (`HoverTip`, placed last in `MainWindow`) and each row (`TipRow`) reports when to show it.
+
+// Row wrapper: shows the tip after 450 ms of continuous hover, hides it on leave and on press
+// (so dragging a slider or clicking mute hides it). `bg` lies below the children and only fills the
+// gaps between them; `inner-hover` / `inner-pressed` come from the children's own TouchAreas, so
+// no click or drag is intercepted. Parameters of `tip`: text, row x, row y, row height, show.
+export component TipRow inherits Rectangle {
+    in property <string> text;
+    in property <bool> inner-hover: false;
+    in property <bool> inner-pressed: false;
+    callback tip(string, length, length, length, bool);
+
+    property <bool> active: (bg.has-hover || root.inner-hover) && !bg.pressed && !root.inner-pressed && root.text != "";
+
+    changed active => {
+        if root.active {
+            delay.running = true;
+        } else {
+            delay.running = false;
+            root.tip("", 0px, 0px, 0px, false);
+        }
+    }
+
+    bg := TouchArea { }
+    @children
+    delay := Timer {
+        interval: 450ms;
+        running: false;
+        triggered => {
+            delay.running = false;
+            root.tip(root.text, root.absolute-position.x, root.absolute-position.y, root.height, true);
+        }
+    }
+}
+
+// The overlay. Not interactive (no TouchArea). Anchor = row left x, row top y, row height; the label
+// goes below the row, flips above it near the bottom and stays inside the window horizontally.
+export component HoverTip inherits Rectangle {
+    in property <string> text;
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <length> anchor-h;
+    in property <bool> shown: false;
+
+    visible: root.shown && root.text != "";
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    Rectangle {
+        width: min(label.preferred-width + 20px, 300px);
+        height: 28px;
+        x: max(4px, min(root.anchor-x, root.width - self.width - 4px));
+        y: root.anchor-y + root.anchor-h + 2px + self.height + 4px > root.height ? max(4px, root.anchor-y - 2px - self.height) : root.anchor-y + root.anchor-h + 2px;
+        background: #252832;
+        border-width: 1px;
+        border-color: #343640;
+        border-radius: 6px;
+        label := Text {
+            x: 10px;
+            y: 6px;
+            width: parent.width - 20px;
+            height: 16px;
+            text: root.text;
+            color: #f3f4f8;
+            font-family: "Segoe UI";
+            font-size: 12px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
