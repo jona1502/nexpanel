@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::Display::{
     CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitor, GetCapabilitiesStringLength,
-    GetMonitorBrightness, GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR,
-    GetVCPFeatureAndVCPFeatureReply, PHYSICAL_MONITOR, SetVCPFeature,
+    GetMonitorBrightness, GetMonitorCapabilities, GetNumberOfPhysicalMonitorsFromHMONITOR,
+    GetPhysicalMonitorsFromHMONITOR, GetVCPFeatureAndVCPFeatureReply, PHYSICAL_MONITOR,
+    SetVCPFeature,
 };
 use windows::Win32::Foundation::{HANDLE, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -256,6 +257,13 @@ fn cmd_list() {
             Ok((c, mx)) => println!("  VCP 0x10 get: cur={c} max={mx} [{}]", ms(d)),
             Err(err) => println!("  VCP 0x10 get: ERROR {err} [{}]", ms(d)),
         }
+        let (mut caps, mut temps) = (0u32, 0u32);
+        // SAFETY: valid out pointers. Read-only.
+        let ok = unsafe { GetMonitorCapabilities(h, &mut caps, &mut temps) } != 0;
+        println!(
+            "  GetMonitorCapabilities: ok={ok} caps={caps:#x} (MC_CAPS_BRIGHTNESS 0x2: {}) color temps={temps:#x}",
+            caps & 2 != 0
+        );
     }
     // entries dropped here -> DestroyPhysicalMonitor
 }
