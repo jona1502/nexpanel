@@ -51,6 +51,40 @@ fn capture_name(tab: usize) -> &'static str {
         "04-einstellungen.png",
     ][tab]
 }
+/// Tick while the panel is open: text, sliders and worker snapshots must feel live.
+const FAST_TICK: Duration = Duration::from_millis(200);
+/// Tick while hidden: only drains worker channels, crash flags and the "open" request of a
+/// second instance. Countdown expiry has its own one-shot timer.
+const IDLE_TICK: Duration = Duration::from_secs(1);
+/// What decides how often the UI tick has to run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TickState {
+    visible: bool,
+    /// Workers or a second instance may still need attention while hidden.
+    watching: bool,
+}
+/// `None` stops the tick completely until something re-arms it.
+fn next_tick_interval(state: &TickState) -> Option<Duration> {
+    if state.visible {
+        Some(FAST_TICK)
+    } else if state.watching {
+        Some(IDLE_TICK)
+    } else {
+        None
+    }
+}
+/// Delay for the one-shot timer that wakes the loop exactly when a running countdown ends.
+fn expiry_delay(running: bool, remaining_ms: u64) -> Option<Duration> {
+    // +10 ms so the wake-up never lands before the deadline (poll_expired needs `now >= end`).
+    running.then(|| Duration::from_millis(remaining_ms.saturating_add(10)))
+}
+type TickBody = Rc<RefCell<Box<dyn FnMut()>>>;
+/// Runs the tick now (no-op while it is already running).
+fn wake(body: &TickBody) {
+    if let Ok(mut f) = body.try_borrow_mut() {
+        f();
+    }
+}
 type TimerCheck = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 /// Monotonic ms including standby (see `nexpanel::clock`); wall-clock jumps do not affect timers.
 fn now() -> u64 {
@@ -217,6 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (dtx, drx, display_crashed) = services::display::spawn();
     let (atx, arx, audio_crashed) = services::audio::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
+    let tick_body: TickBody = Rc::new(RefCell::new(Box::new(|| {})));
     // Persistent models: rows are updated in place so a dragged slider survives.
     let display_model = Rc::new(VecModel::<DisplayRow>::default());
     let audio_model = Rc::new(VecModel::<AudioItem>::default());
@@ -301,6 +336,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let weak = app.as_weak();
                 let popup = popup.clone();
                 let timer_check = timer_check.clone();
+                let display_changes = dtx.clone();
+                let tick_body = tick_body.clone();
                 move |event| {
                     let Some(app) = weak.upgrade() else {
                         return;
@@ -326,10 +363,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 check();
                             }
                         }
+                        TrayEvent::DisplayChange => {
+                            let _ = display_changes.send(DisplayCommand::TopologyChanged);
+                        }
                         TrayEvent::Quit => {
                             let _ = slint::quit_event_loop();
                         }
                     }
+                    // Panel may have been shown: refresh visibility, tick rate and snapshots now.
+                    wake(&tick_body);
                 }
             }),
             Box::new({
@@ -438,6 +480,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.on_countdown_action({
         let c = countdown.clone();
         let weak = app.as_weak();
+        let tick_body = tick_body.clone();
         move |action| {
             if let Some(a) = weak.upgrade() {
                 let mut c = c.borrow_mut();
@@ -456,19 +499,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 a.set_countdown_running(c.is_running());
                 a.set_countdown_text(clock(c.remaining_ms(now()).saturating_add(999)));
             }
+            // Re-arm the expiry timer for the new deadline.
+            wake(&tick_body);
         }
     });
     app.on_stopwatch_action({
         let s = stopwatch.clone();
+        let tick_body = tick_body.clone();
         move |action| {
-            let mut s = s.borrow_mut();
-            if action == 1 {
-                s.reset();
-            } else if s.is_running() {
-                s.pause(now());
-            } else {
-                s.start(now());
+            {
+                let mut s = s.borrow_mut();
+                if action == 1 {
+                    s.reset();
+                } else if s.is_running() {
+                    s.pause(now());
+                } else {
+                    s.start(now());
+                }
             }
+            wake(&tick_body);
         }
     });
     let shutdown_display = dtx.clone();
@@ -487,16 +536,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }));
-    let tick = slint::Timer::default();
+    let tick = Rc::new(slint::Timer::default());
+    let expiry = Rc::new(slint::Timer::default());
+    let tick_interval = Cell::new(Some(FAST_TICK));
     let ready = Rc::new(Cell::new((false, false)));
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
     let tick_popup = popup.clone();
     let mut visible = None;
     let mut crash_shown = (false, false);
-    tick.start(
-        slint::TimerMode::Repeated,
-        Duration::from_millis(200),
+    let tick_timer = Rc::downgrade(&tick);
+    let tick_wake = Rc::downgrade(&tick_body);
+    *tick_body.borrow_mut() = Box::new({
         move || {
             let Some(a) = weak.upgrade() else {
                 return;
@@ -568,8 +619,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = dtx.send(DisplayCommand::SetActive(active));
                 let _ = atx.send(AudioCommand::SetActive(active));
             }
-        },
-    );
+            // Countdown expiry: one-shot timer at the exact deadline instead of polling.
+            let delay = {
+                let c = countdown.borrow();
+                expiry_delay(c.is_running(), c.remaining_ms(now()))
+            };
+            match delay {
+                Some(delay) => {
+                    let again = tick_wake.clone();
+                    expiry.start(slint::TimerMode::SingleShot, delay, move || {
+                        if let Some(body) = again.upgrade() {
+                            wake(&body);
+                        }
+                    });
+                }
+                None => expiry.stop(),
+            }
+            let next = next_tick_interval(&TickState {
+                visible: active,
+                watching: !capture_mode,
+            });
+            if next != tick_interval.get()
+                && let Some(timer) = tick_timer.upgrade()
+            {
+                tick_interval.set(next);
+                match next {
+                    Some(d) => {
+                        timer.set_interval(d);
+                        if !timer.running() {
+                            timer.restart();
+                        }
+                    }
+                    None => timer.stop(),
+                }
+            }
+        }
+    });
+    tick.start(slint::TimerMode::Repeated, FAST_TICK, {
+        let body = tick_body.clone();
+        move || wake(&body)
+    });
     if mode != Mode::Normal(true) {
         dispatch(&app, &popup, Event::ShowRequested, ms());
     }
@@ -692,6 +781,22 @@ mod tests {
         apply_countdown_action(&mut timer, &mut duration, &mut expired, 30, true, 4000);
         assert!(!timer.is_running());
         assert_eq!(timer.remaining_ms(4000), 30000);
+    }
+    #[test]
+    fn tick_is_fast_only_while_visible() {
+        let state = |visible, watching| TickState { visible, watching };
+        assert_eq!(next_tick_interval(&state(true, true)), Some(FAST_TICK));
+        assert_eq!(next_tick_interval(&state(true, false)), Some(FAST_TICK));
+        assert_eq!(next_tick_interval(&state(false, true)), Some(IDLE_TICK));
+        assert_eq!(next_tick_interval(&state(false, false)), None);
+        assert!(IDLE_TICK >= Duration::from_secs(1) && FAST_TICK <= Duration::from_millis(200));
+    }
+    #[test]
+    fn expiry_timer_fires_at_deadline_only_while_running() {
+        assert_eq!(expiry_delay(false, 5000), None);
+        assert_eq!(expiry_delay(true, 5000), Some(Duration::from_millis(5010)));
+        assert_eq!(expiry_delay(true, 0), Some(Duration::from_millis(10)));
+        assert!(expiry_delay(true, u64::MAX).is_some());
     }
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()

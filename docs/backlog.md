@@ -37,8 +37,8 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 ## P2 – Verbesserungen
 
 - [x] Position vor `show()` setzen, um ein Flackern beim ersten Frame zu vermeiden.
-- [ ] Idle-Wakeups reduzieren: Der 200-ms-Tick läuft auch bei verborgenem Panel.
-- [ ] Hotplug über `WM_DISPLAYCHANGE` statt 4-s-Polling erkennen.
+- [x] Idle-Wakeups reduzieren: Der 200-ms-Tick läuft nur noch bei sichtbarem Panel (verborgen 1 s, Countdown per One-Shot).
+- [x] Hotplug über `WM_DISPLAYCHANGE` statt 4-s-Polling erkennen (Sicherheitspoll 30/60 s, Helligkeit nur bei sichtbarem Panel).
 - [x] `StartupApproved` auswerten, `deny_unknown_fields` lockern, vor dem Reset ein Backup der korrupten Datei anlegen.
 - [ ] Esc soll offene ComboBox-Popups schließen, nicht das ganze Panel. (Nicht umgesetzt: Popup-Zustand nicht abfragbar, siehe docs/testing.md.)
 - [ ] Tray-Icon in mehreren Größen (16/20/24/32): Assets `tray-<px>.png` und `platform::pick_icon_size` vorhanden; Einbindung in `tray.rs` offen.
