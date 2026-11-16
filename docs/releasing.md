@@ -5,7 +5,7 @@ Releases entstehen über den Workflow `.github/workflows/release.yml` (Windows, 
 ## Release erstellen
 
 1. Version in `apps/desktop/Cargo.toml` anheben (und `Cargo.lock` aktualisieren). Der Tag muss exakt `v<Version>` lauten, sonst bricht der Workflow ab.
-2. `scripts/package.ps1` benennt das Paket derzeit fest `nexpanel-0.1.0-windows-x64.zip`. Bei einer neuen Version den Dateinamen im Skript anpassen (der Workflow prüft `dist/nexpanel-<Version>-windows-x64.zip` und schlägt sonst fehl).
+2. `scripts/package.ps1` liest die Version aus `apps/desktop/Cargo.toml` (`[package] version`, Helfer `scripts/common.ps1`) und erzeugt `dist/nexpanel-<Version>-windows-x64.zip` plus `.sha256`, passend zur Prüfung im Workflow. Das Paket enthält `VERSION.txt` und `THIRD-PARTY-NOTICES.md` (erzeugt von `scripts/gen-third-party-notices.ps1` aus `cargo metadata`, inkl. Lizenztexten aus der lokalen Cargo-Registry; die Registry-Quellen müssen vorhanden sein, ggf. vorher `cargo fetch --locked`).
 3. Statuszeilen in `README.md`, `docs/testing.md` und `docs/package-readme.md` aktualisieren.
 4. Änderungen per PR nach `main` bringen, CI muss grün sein.
 5. Tag setzen und pushen: `git tag vX.Y.Z` und `git push origin vX.Y.Z`. Alternativ: Actions → Release → „Run workflow“ mit Tag (und `draft`).
@@ -22,7 +22,8 @@ Releases entstehen über den Workflow `.github/workflows/release.yml` (Windows, 
 ## Vor dem ersten öffentlichen Release
 
 - [ ] Lizenz von NexPanel gewählt (`LICENSE`-Datei, siehe `docs/licensing.md`).
-- [ ] Lizenzen der Abhängigkeiten geprüft, auch transitive (`docs/licensing.md`, z. B. `cargo-deny`/`cargo-about`); Slint-Bedingungen und „Über NexPanel“ abgeglichen.
+- [x] Drittlizenz-Datei im Paket (`THIRD-PARTY-NOTICES.md`, automatisch erzeugt).
+- [ ] Lizenzen der Abhängigkeiten rechtlich geprüft (`docs/licensing.md`); Slint-Bedingungen und „Über NexPanel“ abgeglichen.
 - [ ] Handtests aus `docs/testing.md` durchgeführt.
 - [ ] Signierung entschieden: unsigniert (SmartScreen-Warnung) oder Zertifikat.
 - [ ] Statusformulierung in `README.md` angepasst (kein „lokal, nicht gepusht“ mehr).

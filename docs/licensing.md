@@ -83,7 +83,11 @@ Build-only: `embed-resource` (MIT) und `slint-build`. Deren eigene transitive Bu
 - **Schriften**: Es sind Font-Parser-Crates (`fontdb`, `ttf-parser`, `fontique`, …) vorhanden, aber keine eingebetteten Schriftdateien über Crates. Slint-eigene Schriften und die Windows-Systemschriften sind vor Release gesondert zu klären.
 - Zwei Versionen von `winreg` im Lockfile (0.55.0 direkt, 0.56.0 transitiv), beide MIT.
 
-Blocker für Closed-Source-Distribution: keiner aus den Abhängigkeiten, sofern der Slint-Royalty-free-Pfad (Bedingungen oben) erfüllt wird. Offen bleibt die Lizenz von NexPanel selbst und die Drittlizenz-Datei im Release-Paket.
+Blocker für Closed-Source-Distribution: keiner aus den Abhängigkeiten, sofern der Slint-Royalty-free-Pfad (Bedingungen oben) erfüllt wird. Offen bleibt die Lizenz von NexPanel selbst. Die Drittlizenz-Datei im Release-Paket wird erzeugt (siehe unten).
+
+### Drittanbieter-Hinweise (generiert)
+
+`scripts/gen-third-party-notices.ps1` erzeugt `dist/THIRD-PARTY-NOTICES.md` (Crate, Version, SPDX, Repository, Lizenztexte aus der Cargo-Registry, nach Hash dedupliziert; fehlende Texte mit Verweis auf das Repository). `scripts/package.ps1` ruft es auf und legt die Datei ins ZIP; `install.ps1` kopiert sie neben die exe. Die Datei wird nicht eingecheckt. Grundlage: `cargo metadata --filter-platform x86_64-pc-windows-msvc`, nur normale Abhängigkeiten.
 
 ### Neu erzeugen
 
