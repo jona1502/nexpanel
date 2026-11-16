@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release-Tag, z. B. v0.1.0 (muss zur Version in apps/desktop/Cargo.toml passen)'
+        required: true
+        type: string
+      draft:
+        description: 'Als Entwurf anlegen (nicht veröffentlichen)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release (Windows MSVC)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      # Tag-Push erzeugt immer einen Entwurf; nur manuell mit draft=false wird veröffentlicht.
+      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'true' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Verify tag matches Cargo version
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw -LiteralPath apps/desktop/Cargo.toml
+          if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'Version in apps/desktop/Cargo.toml nicht gefunden.' }
+          $version = $Matches[1]
+          if ($env:RELEASE_TAG -ne "v$version") {
+            throw "Tag '$($env:RELEASE_TAG)' passt nicht zur Version in apps/desktop/Cargo.toml (erwartet: 'v$version'). Version anheben oder Tag korrigieren."
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Install Rust 1.96.1
+        run: rustup toolchain install 1.96.1 --profile minimal --component rustfmt --component clippy --target x86_64-pc-windows-msvc
+      - name: Package and verify local installation
+        shell: pwsh
+        run: |
+          ./scripts/package.ps1
+          ./scripts/test-package.ps1
+      - name: Verify package files
+        shell: pwsh
+        run: |
+          $zip = "dist/nexpanel-$($env:VERSION)-windows-x64.zip"
+          foreach ($f in @($zip, "$zip.sha256")) {
+            if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "Erwartete Datei fehlt: $f (package.ps1 Dateiname prüfen)." }
+          }
+      - name: Create GitHub release
+        shell: pwsh
+        run: |
+          $zip = "dist/nexpanel-$($env:VERSION)-windows-x64.zip"
+          $name = Split-Path -Leaf $zip
+          $header = @"
+          ## Hinweise zu diesem Release
+
+          - **Unsigniert:** Die Binärdatei ist nicht signiert. Windows SmartScreen zeigt eine Warnung an (erwartet).
+          - **Nur Windows 11 x64.** Andere Plattformen und Windows-Versionen werden nicht unterstützt.
+          - **Kein Installer/MSI:** Das Paket enthält ``install.ps1`` und ``uninstall.ps1``, noch kein MSI.
+          - **SHA256 prüfen:** ``(Get-FileHash .\$name -Algorithm SHA256).Hash.ToLower()`` muss dem Wert in ``$name.sha256`` entsprechen.
+          - **Slint-Lizenz/Attribution:** siehe [docs/licensing.md](https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_TAG)/docs/licensing.md).
+          - **Projektlizenz:** Die Lizenz von NexPanel ist noch nicht gewählt.
+
+          ## Änderungen
+          "@
+          Set-Content -LiteralPath release-header.md -Value $header -Encoding utf8
+          $ghArgs = @($env:RELEASE_TAG, $zip, "$zip.sha256", '--title', "NexPanel $($env:VERSION)", '--notes-file', 'release-header.md', '--generate-notes', '--target', $env:GITHUB_SHA)
+          if ($env:RELEASE_DRAFT -eq 'true') { $ghArgs += '--draft' }
+          if ([version]($env:VERSION -replace '[-+].*$', '') -lt [version]'1.0.0' -or $env:VERSION -match '-') { $ghArgs += '--prerelease' }
+          gh release create @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create fehlgeschlagen.' }
