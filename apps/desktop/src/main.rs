@@ -170,11 +170,25 @@ fn show(app: &MainWindow) {
     app.window().with_winit_window(|w| w.focus_window());
 }
 /// Feeds `event` to the popup state machine and performs the resulting action.
+/// What Esc does: an open dropdown list absorbs it, otherwise the panel hides.
+#[derive(Debug, PartialEq, Eq)]
+enum EscAction {
+    CloseDropdown,
+    ClosePanel,
+}
+fn esc_action(dropdown_open: bool) -> EscAction {
+    if dropdown_open {
+        EscAction::CloseDropdown
+    } else {
+        EscAction::ClosePanel
+    }
+}
 fn dispatch(app: &MainWindow, popup: &RefCell<Popup>, event: Event, ms: u64) {
     let action = popup.borrow_mut().handle(event, ms);
     match action {
         Action::Show => show(app),
         Action::Hide => {
+            app.set_dropdown_open(false);
             let _ = app.hide();
             popup.borrow_mut().handle(Event::HideDone, ms);
         }
@@ -370,6 +384,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .borrow_mut()
                         .handle(Event::Blur { tray_pressed }, ms());
                     if action == Action::Hide {
+                        app.set_dropdown_open(false);
                         let _ = window.hide();
                         blur_popup.borrow_mut().handle(Event::HideDone, ms());
                     }
@@ -380,10 +395,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && event.logical_key
                         == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) =>
             {
-                let mut popup = blur_popup.borrow_mut();
-                popup.handle(Event::Esc, ms());
-                let _ = window.hide();
-                popup.handle(Event::HideDone, ms());
+                let dropdown_open = weak.upgrade().is_some_and(|a| a.get_dropdown_open());
+                match esc_action(dropdown_open) {
+                    EscAction::CloseDropdown => {
+                        if let Some(app) = weak.upgrade() {
+                            app.set_dropdown_open(false);
+                        }
+                    }
+                    EscAction::ClosePanel => {
+                        let mut popup = blur_popup.borrow_mut();
+                        popup.handle(Event::Esc, ms());
+                        if let Some(app) = weak.upgrade() {
+                            app.set_dropdown_open(false);
+                        }
+                        let _ = window.hide();
+                        popup.handle(Event::HideDone, ms());
+                    }
+                }
                 return EventResult::PreventDefault;
             }
             winit::event::WindowEvent::ScaleFactorChanged { .. } => {
@@ -947,6 +975,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn esc_closes_dropdown_before_panel() {
+        assert_eq!(esc_action(true), EscAction::CloseDropdown);
+        assert_eq!(esc_action(false), EscAction::ClosePanel);
+    }
     use super::*;
     #[test]
     fn expired_countdown_controller_restarts_selected_duration_and_clears_alarm() {
