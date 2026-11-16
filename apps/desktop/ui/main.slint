@@ -2,19 +2,43 @@ import { AboutCard } from "about.slint";
 import { VolumeSlider } from "volume_slider.slint";
 import { Button, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
-export struct AudioItem { id:string, name:string, value:int, muted:bool }
-component Heading inherits Text { color:#f1f3fa; font-size:20px; font-weight:600; }
+export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string }
+component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
 component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
-component Card inherits Rectangle { background:#20242e; border-radius:12px; border-width:1px; border-color:#303642; }
+component Card inherits Rectangle { background:#252832; border-radius:8px; }
+component TabButton inherits Rectangle {
+ in property<string> text; in property<bool> active; in property<color> accent;
+ callback clicked();
+ height:28px; border-radius:6px; background:root.active?#252832:ta.has-hover?#1f222b:transparent;
+ Text{text:root.text;color:root.active?root.accent:#b6bdcc;font-size:13px;font-weight:root.active?600:400;horizontal-alignment:center;vertical-alignment:center;}
+ ta := TouchArea{clicked=>{root.clicked();}}
+}
+// Speaker glyph; `muted` swaps the sound waves for a cross. 16x16 viewbox, crisp at any scale.
+component SpeakerIcon inherits Rectangle {
+ in property<bool> muted; in property<color> tint:#e6e7ee;
+ Path{width:100%;height:100%;viewbox-width:16;viewbox-height:16;fill:root.tint;commands:"M1.5 6 H4.5 L8.5 2.5 V13.5 L4.5 10 H1.5 Z";}
+ if !root.muted: Path{width:100%;height:100%;viewbox-width:16;viewbox-height:16;fill:transparent;stroke:root.tint;stroke-width:1.3px;commands:"M10.8 5.4 Q12.6 8 10.8 10.6 M12.6 3.6 Q16 8 12.6 12.4";}
+ if root.muted: Path{width:100%;height:100%;viewbox-width:16;viewbox-height:16;fill:transparent;stroke:root.tint;stroke-width:1.3px;commands:"M11 5.5 L15 10.5 M15 5.5 L11 10.5";}
+}
+// App icon (real icon when available), otherwise a rounded square with the first letter.
+component AppIcon inherits Rectangle {
+ in property<string> letter; in property<bool> muted;
+ callback clicked();
+ width:24px; height:24px; border-radius:5px; background:#343640; opacity:root.muted?0.4:1;
+ Text{text:root.letter;color:#e6e7ee;font-size:13px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
+ TouchArea{mouse-cursor:pointer;clicked=>{root.clicked();}}
+}
 export component MainWindow inherits Window {
  init => { Palette.color-scheme = ColorScheme.dark; }
- title:"NexPanel"; preferred-width:400px; preferred-height:620px; min-width:0px; min-height:0px; no-frame:true; always-on-top:true;
- background:#13161d; default-font-family:"Segoe UI"; default-font-size:13px;
+ title:"NexPanel"; preferred-width:392px; preferred-height:440px; min-width:0px; min-height:0px; no-frame:true; always-on-top:true;
+ background:#181a20; default-font-family:"Segoe UI"; default-font-size:13px;
  in-out property<int> tab:0;
  in property<string> app-version;
  in-out property<bool> show-about:false;
  in property<[DisplayRow]> displays;
  in property<[AudioItem]> audio;
+ in property<string> audio-device:"Lautstärke";
+ in-out property<bool> apps-open:true;
  in property<string> display-status:"Monitore werden erkannt …";
  in property<string> audio-status:"Audio wird erkannt …";
  in property<string> settings-error;
@@ -31,61 +55,83 @@ export component MainWindow inherits Window {
  in property<bool> stopwatch-running:false;
  in property<bool> expired:false;
  in-out property<int> seconds:300;
- out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#86a6ff;
+ out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#809cff;
  callback hide-panel(); callback refresh-display(); callback refresh-audio();
  callback brightness(string,int); callback volume(string,int); callback mute(string,bool);
  callback save-settings(); callback reset-settings(); callback countdown-action(int); callback stopwatch-action(int);
  VerticalLayout {
- padding:20px; spacing:16px;
- HorizontalLayout { spacing:8px;
- VerticalLayout {spacing:3px; Text {text:"NexPanel";color:root.accent;font-size:25px;font-weight:700; animate color {duration:root.animations?160ms:0ms;}} Hint{text:"DEIN SYSTEM. EIN PANEL.";font-size:10px;} }
+ padding:10px; spacing:8px;
+ HorizontalLayout { spacing:8px; height:24px;
+ Text {text:"NexPanel";color:root.accent;font-size:16px;font-weight:700;vertical-alignment:center; animate color {duration:root.animations?160ms:0ms;}}
  Rectangle {horizontal-stretch:1;background:transparent;}
- Button {text:"×";max-width:32px; clicked=>{root.hide-panel();}}
+ Rectangle {width:24px;height:24px;border-radius:6px;background:close.has-hover?#343640:transparent;
+  Text{text:"×";color:#b6bdcc;font-size:16px;horizontal-alignment:center;vertical-alignment:center;}
+  close := TouchArea{clicked=>{root.hide-panel();}}}
  }
- HorizontalLayout {spacing:5px;
- for label[i] in ["Displays","Audio","Zeit","Einstellungen"]: Button {min-width:0px;text:label; primary:root.tab==i; clicked=>{root.tab=i;}}
+ HorizontalLayout {spacing:4px;
+ for label[i] in ["Displays","Audio","Zeit","Einstellungen"]: TabButton {text:label; active:root.tab==i; accent:root.accent; clicked=>{root.tab=i;}}
  }
- Rectangle {height:1px;background:#303642;}
- ScrollView {vertical-stretch:1;
- VerticalLayout {spacing:12px;alignment:start; padding-right:8px;
- if root.tab==0: VerticalLayout {spacing:12px;alignment:start;
- HorizontalLayout {Heading{text:"Helligkeit";} Button{text:"Aktualisieren";clicked=>{root.refresh-display();}}}
- Hint{text:"Direkte Hardwaresteuerung · 0–100 %";}
+ Rectangle {height:1px;background:#343640;}
+ if root.tab==1: VerticalLayout {vertical-stretch:1;spacing:6px;alignment:start;
+ HorizontalLayout {height:26px;padding-left:4px;padding-right:4px;spacing:6px;
+ Text{text:root.audio-device;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;vertical-alignment:center;}
+ Rectangle {width:24px;
+  Path{x:6px;y:9px;width:12px;height:7px;viewbox-width:12;viewbox-height:7;fill:transparent;stroke:#b6bdcc;stroke-width:1.4px;commands:root.apps-open?"M1 6 L6 1 L11 6":"M1 1 L6 6 L11 1";}
+  TouchArea{mouse-cursor:pointer;clicked=>{root.apps-open=!root.apps-open;}}}
+ }
+ if root.audio-status!="": Hint{text:root.audio-status;}
+ if root.audio.length==0: Hint{text:"Kein Audiogerät verfügbar";horizontal-alignment:center;}
+ VerticalLayout {spacing:0px;
+ for row in root.audio: Rectangle {height:row.master?48px:0px;visible:row.master;
+ HorizontalLayout {padding-left:4px;padding-right:4px;spacing:10px;
+ Rectangle {width:28px;
+  SpeakerIcon{width:20px;height:20px;muted:row.muted;tint:row.muted?#8a8d99:#e6e7ee;}
+  TouchArea{mouse-cursor:pointer;clicked=>{root.mute(row.id,!row.muted);}}}
+ VolumeSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+ Text{width:44px;text:row.value;color:row.muted?#8a8d99:#f3f4f8;font-size:22px;horizontal-alignment:right;vertical-alignment:center;}
+ }}
+ }
+ if root.apps-open: Rectangle {vertical-stretch:1;background:#13151a;border-radius:8px;
+ ScrollView {
+ VerticalLayout {alignment:start;padding-top:4px;padding-bottom:4px;
+ for row in root.audio: Rectangle {height:row.master?0px:36px;visible:!row.master;
+ HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
+ AppIcon{letter:row.initial;muted:row.muted;y:6px;clicked=>{root.mute(row.id,!row.muted);}}
+ VolumeSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+ Text{width:36px;text:row.value;color:row.muted?#8a8d99:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
+ }}
+ }
+ }
+ }
+ }
+ if root.tab!=1: ScrollView {vertical-stretch:1;
+ VerticalLayout {spacing:8px;alignment:start; padding-right:6px;
+ if root.tab==0: VerticalLayout {spacing:8px;alignment:start;
+ HorizontalLayout {Heading{text:"Helligkeit";vertical-alignment:center;} Button{text:"Aktualisieren";clicked=>{root.refresh-display();}}}
  if root.display-status!="": Hint{text:root.display-status;}
- if root.displays.length==0: Card {min-height:96px;Text{text:"Keine Monitore verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
- for row in root.displays: Card {VerticalLayout {padding:14px;spacing:8px;
- HorizontalLayout {Text{text:row.name;color:#eef0f7;font-weight:600;horizontal-stretch:1;}Text{text:row.supported?row.value+" %":"—";color:root.accent;}}
+ if root.displays.length==0: Card {min-height:64px;Text{text:"Keine Monitore verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
+ for row in root.displays: Card {VerticalLayout {padding:10px;spacing:4px;
+ HorizontalLayout {Text{text:row.name;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;}Text{text:row.supported?row.value+" %":"—";color:root.accent;font-size:13px;}}
  VolumeSlider {value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
- Hint{text:row.status;}
+ if row.status!="": Hint{text:row.status;font-size:11px;}
  }}
  CheckBox{enabled:root.settings-ready;text:"Unterstützte Displays koppeln";checked:root.linked;toggled=>{root.linked=self.checked;root.save-settings();}}
- Hint{text:"Ohne DDC/CI oder interne Windows-Helligkeit bleibt ein Display sichtbar, aber nicht regelbar.";}
+ Hint{text:"Ohne DDC/CI oder interne Windows-Helligkeit bleibt ein Display sichtbar, aber nicht regelbar.";font-size:11px;}
  }
- if root.tab==1: VerticalLayout {spacing:12px;alignment:start;
- HorizontalLayout {Heading{text:"Lautstärke";} Button{text:"Aktualisieren";clicked=>{root.refresh-audio();}}}
- Hint{text:"Standardausgabe und Anwendungen · 0–100 %";}
- if root.audio-status!="": Hint{text:root.audio-status;}
- if root.audio.length==0: Card {min-height:96px;Text{text:"Kein Audiogerät verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
- for row in root.audio: Card {VerticalLayout {padding:14px;spacing:8px;
- HorizontalLayout {Text{text:row.name;color:#eef0f7;font-weight:600;horizontal-stretch:1;}Text{text:row.value+" %";color:root.accent;}}
- VolumeSlider{value:row.value;changed(value)=>{root.volume(row.id,round(value));}}
- CheckBox{text:"Stumm";checked:row.muted;toggled=>{root.mute(row.id,self.checked);}}
- }}
- }
- if root.tab==2: VerticalLayout {spacing:12px;alignment:start;
+ if root.tab==2: VerticalLayout {spacing:8px;alignment:start;
  Heading{text:"Zeit für Fokus";}
- if root.expired: Rectangle {height:52px;background:#554125;border-radius:10px;Text{text:"✓  Dein Timer ist abgelaufen";color:#ffdb9a;horizontal-alignment:center;vertical-alignment:center;}}
- Card {VerticalLayout{padding:16px;spacing:12px;
- Hint{text:"COUNTDOWN";}
- Text{text:root.countdown-text;color:root.expired?#ffcc88:root.accent;font-size:38px;font-weight:600;horizontal-alignment:center;}
+ if root.expired: Rectangle {height:36px;background:#554125;border-radius:8px;Text{text:"✓  Dein Timer ist abgelaufen";color:#ffdb9a;horizontal-alignment:center;vertical-alignment:center;}}
+ Card {VerticalLayout{padding:12px;spacing:8px;
+ Hint{text:"COUNTDOWN";font-size:11px;}
+ Text{text:root.countdown-text;color:root.expired?#ffcc88:root.accent;font-size:32px;font-weight:600;horizontal-alignment:center;}
  HorizontalLayout{Text{text:"Dauer (Sekunden)";color:#b6bdcc;vertical-alignment:center;} SpinBox{minimum:1;maximum:86400;value<=>root.seconds;enabled:!root.countdown-running;}}
- HorizontalLayout {Button{text:root.expired?"Neu starten":root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} Button{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
+ HorizontalLayout {spacing:8px;Button{text:root.expired?"Neu starten":root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} Button{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
  }}
- Card{VerticalLayout{padding:16px;spacing:12px; Hint{text:"STOPPUHR";}
- Text{text:root.stopwatch-text;color:#edf0fa;font-size:38px;font-weight:600;horizontal-alignment:center;}
- HorizontalLayout{Button{text:root.stopwatch-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.stopwatch-action(0);}}Button{text:"Zurücksetzen";clicked=>{root.stopwatch-action(1);}}}
+ Card{VerticalLayout{padding:12px;spacing:8px; Hint{text:"STOPPUHR";font-size:11px;}
+ Text{text:root.stopwatch-text;color:#f3f4f8;font-size:32px;font-weight:600;horizontal-alignment:center;}
+ HorizontalLayout{spacing:8px;Button{text:root.stopwatch-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.stopwatch-action(0);}}Button{text:"Zurücksetzen";clicked=>{root.stopwatch-action(1);}}}
  }}
- Hint{text:"Läuft auch bei verborgenem Panel und im Standby weiter. Beim App-Neustart werden beide Uhren zurückgesetzt.";}
+ Hint{text:"Läuft auch bei verborgenem Panel und im Standby weiter. Beim App-Neustart werden beide Uhren zurückgesetzt.";font-size:11px;}
  }
  if root.tab==3: VerticalLayout {spacing:12px;alignment:start;
  Heading{text:"Einstellungen";}
@@ -104,6 +150,5 @@ export component MainWindow inherits Window {
  }
  }
  }
- Hint{text:"NEXPANEL  /  0.1";font-size:10px;}
  }
 }

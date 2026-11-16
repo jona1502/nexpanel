@@ -575,16 +575,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(s) = arx.try_iter().last() {
                 snapshot_ready.set((snapshot_ready.get().0, true));
                 a.set_audio_status(s.status.into());
+                let to_item = |r: services::AudioRow, master: bool| AudioItem {
+                    initial: r
+                        .name
+                        .chars()
+                        .next()
+                        .map(|c| c.to_uppercase().collect::<String>())
+                        .unwrap_or_else(|| "?".into())
+                        .into(),
+                    id: r.id.into(),
+                    name: r.name.into(),
+                    value: r.volume as i32,
+                    muted: r.muted,
+                    master,
+                };
                 let mut rows: Vec<_> = s
                     .master
                     .into_iter()
-                    .chain(s.sessions)
-                    .map(|r| AudioItem {
-                        id: r.id.into(),
-                        name: r.name.into(),
-                        value: r.volume as i32,
-                        muted: r.muted,
-                    })
+                    .map(|r| to_item(r, true))
+                    .chain(s.sessions.into_iter().map(|r| to_item(r, false)))
                     .collect();
                 let mut hold = audio_hold.borrow_mut();
                 keep_held(&*audio_model, &mut rows, &mut hold, Instant::now(), |r| {
