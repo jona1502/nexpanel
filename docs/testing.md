@@ -34,3 +34,7 @@ Langsame synchrone DDC-/WMI-Treiber können den jeweiligen Worker blockieren; ke
 Bekannte kleinere Lücken der Distribution: Der Konflikt mit einer fremden Startmenü-Verknüpfung wird erst nach dem Kopieren erkannt. Die Schutzpfade für abweichende Installationsmarkierung, verbotene Ziele, Verzeichnisverknüpfungen und gesperrte Pfade sind nicht alle getestet.
 
 Performance-Zielwerte aus NexPanel.md sind nicht gemessen. Startmenü-/Autostartintegration und fremde Installer-Umgebungen brauchen weitere praktische Prüfung. Die CI-Konfiguration enthält Tests, Release-Build und isolierten Pakettest, wurde aber nicht remote ausgeführt. Browser-Layoutprüfung war ohne Browseroberfläche nicht verfügbar; responsive CSS und HTML wurden gebaut und per HTTP geprüft. Projektlizenz, Slint-/Abhängigkeitsfreigaben (siehe [licensing.md](licensing.md)) und Codesignatur sind vor Veröffentlichung zu klären; es wurde keine Lizenz gewählt.
+
+## Bekannte Einschränkung: Esc und ComboBox
+
+Esc wird im winit-Handler (`main.rs`) vor Slint abgefangen und blendet das ganze Panel aus, auch wenn das Popup der Akzent-ComboBox offen ist. Die Std-ComboBox von Slint 1.18 macht den Popup-Zustand nicht nach außen sichtbar; ohne Eigenbau-ComboBox lässt sich Esc nicht sicher auf das Popup beschränken. Manueller Test: ComboBox öffnen, Esc drücken – das Panel verschwindet (bekannt, offen).
