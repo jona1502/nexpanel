@@ -156,3 +156,10 @@ Panel ist 392 x 440 px (vorher 400 x 620). Vorschau ohne Hardwarezugriff: `nexpa
 | Standby/Ruhezustand während ein Countdown abläuft, Resume | Kein Absturz; Timer-Ablauf wird gemeldet |
 | Autostart-Haken im Tray-Menü direkt nach dem Start (bevor Einstellungen geladen sind) | Keine Änderung, kein falscher Haken |
 | Start mit gesperrtem Fenster-Backend/ohne Tray (Fehlerfall) | Fehlerdialog "NexPanel – Start fehlgeschlagen" und Logeintrag statt stillem Beenden |
+
+### Tray-Icon-Größen
+
+| Schritt | Erwartung |
+|---|---|
+| Skalierung 100 / 125 / 150 / 200 % einstellen (Anzeige ab-/anmelden bzw. Explorer neu starten) | Tray-Icon jeweils scharf, nicht unscharf skaliert (16/20/24/32 px) |
+| Skalierung bei laufender App ändern | Icon wird neu gewählt, kein doppeltes Icon |
