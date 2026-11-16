@@ -48,3 +48,15 @@ Beobachtung: jeder DDC-Aufruf blockiert fast konstant ~60 ms (dxva2 erzwingt War
 - Fehlerfälle (Monitor ohne DDC/CI, per Dock/DisplayLink) mangels Hardware nicht beobachtet; Fehler werden mit `GetLastError` ausgegeben und überspringen den Monitor.
 - Laptop-Pfad (WMI lesen/setzen) ungetestet; `WmiSetBrightness` fehlt.
 - Dauerhaftes Schreiben von VCP 0x10 kann den Monitor-EEPROM belasten (Herstellerangaben unklar) – Coalescing reduziert das.
+
+## Nachtrag: Capabilities-Flag ist kein Kriterium (2026-11-16)
+
+`ddc-spike list` gibt jetzt zusätzlich `GetMonitorCapabilities` aus (nur lesend). NexPanel hat `caps & MC_CAPS_BRIGHTNESS (0x2)` als Voraussetzung geprüft. Messung per `nexpanel --diagnostics` (Debug-Log):
+
+| Monitor | GetMonitorCapabilities | GetMonitorBrightness |
+|---|---|---|
+| 27G1G4 | ok=false, caps=0x0, Fehler 0xC0262580, ~1,9 s | min=0 cur=50 max=100 |
+| CQ32G4 | ok=false, caps=0x0, Fehler 0xC0262580, ~5,3 s | min=0 cur=60 max=100 |
+| MD20831 | ok=true, caps=0x1c17 (Flag 0x2 gesetzt) | min=0 cur=50 max=100 |
+
+Fazit: Der Aufruf scheitert bei zwei Monitoren, obwohl Helligkeit lesbar (und per VCP 0x10 steuerbar) ist; er ist langsam und darf kein Gate sein. Die Quelle (`\.\DISPLAYn`) wurde immer in `EnumDisplayMonitors` gefunden, je 1 physischer Monitor. Erkennung daher: `GetMonitorBrightness`, sonst VCP 0x10.
