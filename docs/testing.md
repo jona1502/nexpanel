@@ -182,3 +182,22 @@ Panel ist 392 x 440 px (vorher 400 x 620). Vorschau ohne Hardwarezugriff: `nexpa
 |---|---|
 | Skalierung 100 / 125 / 150 / 200 % einstellen (Anzeige ab-/anmelden bzw. Explorer neu starten) | Tray-Icon jeweils scharf, nicht unscharf skaliert (16/20/24/32 px) |
 | Skalierung bei laufender App ändern | Icon wird neu gewählt, kein doppeltes Icon |
+
+## Manuell: System-Tab (feat/system-monitor)
+
+Vorschau: `nexpanel.exe --capture-preview <Ordner>` speichert jetzt fünf Tabs (`04-system.png` ist der System-Tab). Reihenfolge der Tabs: Displays, Audio, Zeit, System, Einstellungen.
+
+| Prüfung | Erwartung |
+| --- | --- |
+| System-Tab öffnen, Task-Manager daneben (Registerkarte Leistung) | CPU in % innerhalb weniger Prozentpunkte des Task-Managers (Gesamtauslastung) |
+| RAM | „genutzt / gesamt GB“ und % entsprechen „In Verwendung“ / „Insgesamt“ im Task-Manager (auf 0,1 GB gerundet) |
+| GPU-Last | Entspricht dem höchsten Engine-Wert (meist 3D) der ausgelasteten GPU im Task-Manager; Last erzeugen z. B. mit Video im Browser oder einem Spiel |
+| VRAM | „Dedizierter GPU-Speicher“ des Task-Managers; Gesamtwert aus DXGI |
+| Balkenfarbe | Akzent unter 80 %, bernstein ab 80 %, rot ab 95 % |
+| GPU-Name | Kleine graue Zeile über der GPU-Zeile |
+| Tab wechseln oder Panel verbergen | Messung stoppt: Thread `nexpanel-system` im Process Explorer (Threads) zeigt 0 Zyklen/Wakeups; zurück im System-Tab nach ca. 0,3 s wieder Werte |
+| Aktiver System-Tab | Höchstens ein Wakeup pro Sekunde, CPU des Threads unter 0,5 % |
+| Notebook mit iGPU + dGPU | Kopfzeile zeigt die ausgelastetere GPU; bei Gleichstand die mit mehr VRAM; kein Flackern bei Last auf einer GPU |
+| VM / alter Treiber ohne GPU-Zähler | „GPU: nicht verfügbar“ gedimmt, CPU und RAM laufen weiter, keine Fehlermeldung, Warnung im Log |
+| Timer-Benachrichtigung anklicken | Öffnet Tab „Zeit“ (Index 2); Tray-Menü „Einstellungen“ öffnet Tab 4 |
+| Lange laufen lassen (> 1 min mit GPU-Last wechselnder Prozesse) | Werte bleiben plausibel (PDH-Neuaufbau alle 10 Messungen), kein Speicher- oder Handle-Wachstum |

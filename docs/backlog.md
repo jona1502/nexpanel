@@ -44,6 +44,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 - [x] Esc schließt ein offenes Dropdown, nicht das ganze Panel. (Eigenes `Dropdown` statt Std-ComboBox, siehe docs/testing.md.)
 - [x] Display- und Audio-Worker beim Beenden joinen.
 - [ ] Integrationstests ergänzen.
+- [x] **System-Monitor-Tab** (CPU, RAM, GPU, VRAM; Messung nur bei sichtbarem Tab, feat/system-monitor). Offen: Tray-Tooltip mit Werten, Temperaturen (Hersteller-API/Admin).
 
 ## Messdaten
 
