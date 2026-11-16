@@ -96,7 +96,8 @@ export component DropdownList inherits Rectangle {
     }
     Rectangle {
         x: root.list-x;
-        y: root.list-y;
+        // Clamp so the list never leaves the window (flips up when it would not fit).
+        y: root.list-y + self.height > root.height ? max(4px, root.list-y - 4px - 36px - self.height - 4px) : root.list-y;
         width: root.list-width;
         height: root.model.length * 32px + 8px;
         background: #252832;

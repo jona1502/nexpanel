@@ -812,6 +812,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut active = a.window().is_visible();
             // Window hidden from outside: reconcile, or the next toggle would hide nothing.
             if !active && tick_popup.borrow().state() != State::Closed {
+                a.set_dropdown_open(false);
                 tick_popup.borrow_mut().handle(Event::HideDone, ms());
             }
             // Fallback for a missed blur (grace period, shell stole activation) and for
