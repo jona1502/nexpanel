@@ -1,3 +1,4 @@
+import { AboutCard } from "about.slint";
 import { Button, Slider, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool }
@@ -9,6 +10,8 @@ export component MainWindow inherits Window {
  title:"NexPanel"; preferred-width:400px; preferred-height:620px; min-width:0px; min-height:0px; no-frame:true; always-on-top:true;
  background:#13161d; default-font-family:"Segoe UI"; default-font-size:13px;
  in-out property<int> tab:0;
+ in property<string> app-version;
+ in-out property<bool> show-about:false;
  in property<[DisplayRow]> displays;
  in property<[AudioItem]> audio;
  in property<string> display-status:"Monitore werden erkannt …";

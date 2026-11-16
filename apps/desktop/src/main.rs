@@ -174,6 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let app = MainWindow::new()?;
+    app.set_app_version(env!("CARGO_PKG_VERSION").into());
     let (dtx, drx, display_crashed) = services::display::spawn();
     let (atx, arx, audio_crashed) = services::audio::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();

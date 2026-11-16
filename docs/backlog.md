@@ -32,7 +32,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
   Echte Benachrichtigung statt erzwungenem Popup, das den Fokus stiehlt (ADR-008).
 - [ ] Kontextmenü um Einstellungen und Autostart erweitern.
 - [x] Logging in eine Datei unter `%LOCALAPPDATA%\NexPanel\logs` (feat/logging).
-- [ ] Slint-Lizenzpfad festlegen, „Über“-Bereich mit `AboutSlint` (ADR-009).
+- [x] Slint-Lizenzpfad festlegen, „Über“-Bereich mit `AboutSlint` (ADR-009). Offen: Lizenz von NexPanel selbst, Drittlizenz-Übersicht.
 
 ## P2 – Verbesserungen
 
