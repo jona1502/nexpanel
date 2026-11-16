@@ -14,6 +14,8 @@ pub struct DisplaySnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisplayCommand {
     Refresh,
+    // Windows reported a display/device change; the worker debounces and re-reads the topology.
+    TopologyChanged,
     SetBrightness { id: String, value: u8 },
     SetLinkedBrightness(u8),
     SetActive(bool),

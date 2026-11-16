@@ -47,6 +47,36 @@ fn queue(
     }
     Ok(())
 }
+/// Safety net only: hotplug arrives as `TopologyChanged` from `WM_DISPLAYCHANGE`.
+fn poll_interval(active: bool) -> Duration {
+    Duration::from_secs(if active { 30 } else { 60 })
+}
+/// Bursts of change messages (one per monitor/mode) collapse into a single refresh.
+const DEBOUNCE: Duration = Duration::from_millis(300);
+/// Retry delay after a failed write, so a stale status does not wait for the safety poll.
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+/// How long the worker may sleep: until the safety poll or a debounce deadline, whichever is first.
+fn wait_timeout(since_poll: Duration, active: bool, debounce_left: Option<Duration>) -> Duration {
+    let poll_left = poll_interval(active).saturating_sub(since_poll);
+    debounce_left.map_or(poll_left, |d| d.min(poll_left))
+}
+/// Whether a refresh should read brightness values from the monitors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    /// Panel hidden: nobody looks at the values.
+    Skip,
+    /// Panel visible: re-read when the last read is older than 30 s.
+    IfStale,
+    /// Panel just became visible: values may have changed meanwhile.
+    Now,
+}
+fn read_mode(active: bool, activated: bool) -> Read {
+    match (active, activated) {
+        (true, true) => Read::Now,
+        (true, false) => Read::IfStale,
+        _ => Read::Skip,
+    }
+}
 /// Returns immediately; send Shutdown without joining from the UI thread.
 pub fn spawn() -> (
     Sender<DisplayCommand>,
@@ -85,8 +115,14 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
     let mut active = true;
     let mut last = Instant::now();
     let mut retry = false;
+    let mut debounce: Option<Instant> = None;
     loop {
-        let first = rx.recv_timeout(Duration::from_millis(100));
+        let wait = wait_timeout(
+            last.elapsed(),
+            active,
+            debounce.map(|d| d.saturating_duration_since(Instant::now())),
+        );
+        let first = rx.recv_timeout(wait);
         let mut commands = Vec::new();
         match first {
             Ok(c) => commands.push(c),
@@ -102,11 +138,16 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
         }
         let mut pending = BTreeMap::new();
         let mut refresh = false;
+        let mut activated = false;
         let mut error = None;
         for c in commands {
             match c {
                 DisplayCommand::Shutdown => return,
-                DisplayCommand::SetActive(v) => active = v,
+                DisplayCommand::SetActive(v) => {
+                    activated |= v && !active;
+                    active = v;
+                }
+                DisplayCommand::TopologyChanged => debounce = Some(Instant::now() + DEBOUNCE),
                 DisplayCommand::Refresh => refresh = true,
                 c => {
                     if let Err(e) = queue(&mut pending, &b.snapshot.devices, c) {
@@ -116,9 +157,14 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
                 }
             }
         }
-        let due = last.elapsed() >= Duration::from_secs(if active { 4 } else { 10 });
+        let due = last.elapsed() >= poll_interval(active);
+        let settled = debounce.is_some_and(|d| Instant::now() >= d);
+        if settled {
+            debounce = None;
+        }
+        let due = due || settled || activated;
         if refresh || due {
-            b.refresh(refresh || retry);
+            b.refresh(refresh || retry, read_mode(active, activated));
             retry = false;
             last = Instant::now();
         }
@@ -131,6 +177,7 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
         }
         if let Some(e) = error {
             retry = true;
+            debounce = Some(Instant::now() + RETRY_DELAY);
             b.snapshot.status = e;
         }
         // Send only real changes; identical snapshots would just churn the UI.
@@ -467,7 +514,7 @@ mod native {
             }
             self.last_read = Instant::now();
         }
-        pub fn refresh(&mut self, force: bool) {
+        pub fn refresh(&mut self, force: bool, read: Read) {
             match targets() {
                 Ok(ts) => {
                     let key: Vec<_> = ts.into_iter().map(|t| (t.id, t.source)).collect();
@@ -488,7 +535,9 @@ mod native {
                     return;
                 }
             }
-            if self.last_read.elapsed() < Duration::from_secs(30) {
+            if read == Read::Skip
+                || (read == Read::IfStale && self.last_read.elapsed() < Duration::from_secs(30))
+            {
                 return;
             }
             self.last_read = Instant::now();
@@ -708,7 +757,7 @@ mod native {
             }
         }
         pub fn discover(&mut self) {}
-        pub fn refresh(&mut self, _: bool) {}
+        pub fn refresh(&mut self, _: bool, _: Read) {}
         pub fn write(&mut self, _: &str, _: u8) -> Result<(), String> {
             Err("Windows erforderlich".into())
         }
@@ -732,6 +781,26 @@ mod tests {
                 status: String::new(),
             },
         ]
+    }
+    #[test]
+    fn safety_poll_is_slow_and_slower_when_hidden() {
+        assert_eq!(poll_interval(true), Duration::from_secs(30));
+        assert_eq!(poll_interval(false), Duration::from_secs(60));
+    }
+    #[test]
+    fn worker_sleeps_until_next_deadline() {
+        let s = Duration::from_secs;
+        assert_eq!(wait_timeout(s(0), true, None), s(30));
+        assert_eq!(wait_timeout(s(25), false, None), s(35));
+        assert_eq!(wait_timeout(s(99), false, None), Duration::ZERO);
+        assert_eq!(wait_timeout(s(0), true, Some(DEBOUNCE)), DEBOUNCE);
+        assert_eq!(wait_timeout(s(29), true, Some(s(5))), s(1));
+    }
+    #[test]
+    fn brightness_is_read_only_while_visible_and_once_on_show() {
+        assert_eq!(read_mode(false, false), Read::Skip);
+        assert_eq!(read_mode(true, false), Read::IfStale);
+        assert_eq!(read_mode(true, true), Read::Now);
     }
     #[test]
     fn native_range_is_respected() {
