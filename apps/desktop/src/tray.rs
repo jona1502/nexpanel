@@ -15,6 +15,29 @@ pub enum TrayEvent {
     Open,
     /// Context menu "Beenden".
     Quit,
+    /// User clicked the balloon/toast (`NIN_BALLOONUSERCLICK`).
+    NotificationClicked,
+    /// System resumed from standby/hibernate: timers must be re-checked immediately.
+    Resumed,
+}
+
+const NIN_BALLOONUSERCLICK: u32 = 0x405;
+const WM_POWERBROADCAST: u32 = 0x0218;
+const PBT_APMRESUMESUSPEND: usize = 0x0007;
+const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
+
+/// `WM_POWERBROADCAST` `wParam` values that mean "just woke up".
+fn power_event(wparam: usize) -> Option<TrayEvent> {
+    matches!(wparam, PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND).then_some(TrayEvent::Resumed)
+}
+
+/// Copies `s` into a NUL terminated UTF-16 buffer, truncating to `N - 1` units.
+fn wide<const N: usize>(s: &str) -> [u16; N] {
+    let mut out = [0u16; N];
+    for (slot, unit) in out.iter_mut().zip(s.encode_utf16().take(N - 1)) {
+        *slot = unit;
+    }
+    out
 }
 
 /// Shell notification codes (`NIN_SELECT`, `NIN_KEYSELECT`) and legacy mouse messages.
@@ -34,6 +57,7 @@ const MAX_RETRIES: u8 = 5;
 enum Gesture {
     Activate,
     ContextMenu,
+    Balloon,
 }
 
 /// `LOWORD(lParam)` is the event for `NOTIFYICON_VERSION_4`; the legacy protocol sends the
@@ -47,6 +71,7 @@ fn decode(v4: bool, lparam: isize) -> Option<Gesture> {
     match code {
         NIN_SELECT | NIN_KEYSELECT => Some(Gesture::Activate),
         WM_CONTEXTMENU => Some(Gesture::ContextMenu),
+        NIN_BALLOONUSERCLICK => Some(Gesture::Balloon),
         WM_LBUTTONUP if !v4 => Some(Gesture::Activate),
         WM_RBUTTONUP if !v4 => Some(Gesture::ContextMenu),
         _ => None,
@@ -106,7 +131,7 @@ fn anchor_from_wparam(wparam: usize) -> (i32, i32) {
 }
 
 #[cfg(windows)]
-pub use win::{TrayHost, icon_rect};
+pub use win::{TrayHost, icon_rect, notify};
 
 #[cfg(windows)]
 mod win {
@@ -119,10 +144,11 @@ mod win {
             System::LibraryLoader::GetModuleHandleW,
             UI::{
                 Shell::{
-                    NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
-                    NIM_SETVERSION, NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_MESSAGE,
-                    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
-                    Shell_NotifyIconGetRect, Shell_NotifyIconW,
+                    NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
+                    NIIF_RESPECT_QUIET_TIME, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
+                    NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4,
+                    NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect,
+                    Shell_NotifyIconW,
                 },
                 WindowsAndMessaging::{
                     AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
@@ -184,6 +210,31 @@ mod win {
             right: rect.right,
             bottom: rect.bottom,
         })
+    }
+
+    /// Shows a balloon/toast on the registered icon (UI thread). The shell plays its own
+    /// notification sound and suppresses it in quiet time. Returns false if the icon is not
+    /// registered or the shell refused.
+    pub fn notify(title: &str, text: &str) -> bool {
+        let Some(id) = ICON.lock().ok().and_then(|g| *g) else {
+            return false;
+        };
+        let mut data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: HWND(id.hwnd as *mut _),
+            uID: TRAY_UID,
+            uFlags: NIF_INFO,
+            szInfo: wide(text),
+            szInfoTitle: wide(title),
+            dwInfoFlags: NIIF_INFO | NIIF_RESPECT_QUIET_TIME,
+            ..Default::default()
+        };
+        if id.identity == Identity::Guid {
+            data.uFlags |= NIF_GUID;
+            data.guidItem = TRAY_GUID;
+        }
+        // SAFETY: `data` is fully initialised and outlives the call.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool()
     }
 
     /// State shared between `TrayHost` and the window procedure. Boxed, so the address stored
@@ -265,12 +316,16 @@ mod win {
         }
     }
 
+    impl TrayHost {
+        /// Balloon/toast via the registered icon; see [`notify`].
+        pub fn notify(&self, title: &str, text: &str) -> bool {
+            notify(title, text)
+        }
+    }
+
     impl Shared {
         fn data(&self, identity: Identity, flags: NOTIFY_ICON_DATA_FLAGS) -> NOTIFYICONDATAW {
-            let mut tip = [0u16; 128];
-            for (slot, unit) in tip.iter_mut().zip(TIP.encode_utf16().take(127)) {
-                *slot = unit;
-            }
+            let tip = wide(TIP);
             let mut data = NOTIFYICONDATAW {
                 cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
                 hWnd: self.hwnd.get(),
@@ -404,6 +459,7 @@ mod win {
                     };
                     self.context_menu(anchor);
                 }
+                Some(Gesture::Balloon) => (self.handler)(TrayEvent::NotificationClicked),
                 None => {}
             }
         }
@@ -461,6 +517,13 @@ mod win {
             if msg == shared.taskbar_created {
                 shared.taskbar_created();
                 return LRESULT(0);
+            }
+            if msg == WM_POWERBROADCAST {
+                if let Some(event) = power_event(wparam.0) {
+                    (shared.handler)(event);
+                }
+                // TRUE: request granted / ignored.
+                return LRESULT(1);
             }
             if msg == WM_TIMER && wparam.0 == RETRY_TIMER {
                 shared.retry_tick();
@@ -542,6 +605,16 @@ impl TrayHost {
     }
 }
 #[cfg(not(windows))]
+impl TrayHost {
+    pub fn notify(&self, _: &str, _: &str) -> bool {
+        false
+    }
+}
+#[cfg(not(windows))]
+pub fn notify(_: &str, _: &str) -> bool {
+    false
+}
+#[cfg(not(windows))]
 pub fn icon_rect() -> Option<crate::platform::Area> {
     None
 }
@@ -580,6 +653,32 @@ mod tests {
             Some(Gesture::ContextMenu)
         );
         assert_eq!(decode(false, 0x0201), None);
+    }
+    #[test]
+    fn balloon_click_decodes_in_both_protocols() {
+        assert_eq!(
+            decode(true, ((7u32 << 16) | NIN_BALLOONUSERCLICK) as isize),
+            Some(Gesture::Balloon)
+        );
+        assert_eq!(
+            decode(false, NIN_BALLOONUSERCLICK as isize),
+            Some(Gesture::Balloon)
+        );
+        assert_eq!(decode(true, 0x402), None, "balloon show is not a click");
+    }
+    #[test]
+    fn resume_power_events_map_to_resumed() {
+        assert_eq!(
+            power_event(PBT_APMRESUMEAUTOMATIC),
+            Some(TrayEvent::Resumed)
+        );
+        assert_eq!(power_event(PBT_APMRESUMESUSPEND), Some(TrayEvent::Resumed));
+        assert_eq!(power_event(0x0004), None, "suspend is not resume");
+    }
+    #[test]
+    fn wide_truncates_and_terminates() {
+        let w = wide::<4>("abcdef");
+        assert_eq!(w, [97, 98, 99, 0]);
     }
     #[test]
     fn menu_ids_map_to_events() {
