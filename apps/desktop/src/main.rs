@@ -2,7 +2,7 @@
 use nexpanel::{
     config::{Accent, Config},
     platform,
-    popup_state::{Action, Event, Popup},
+    popup_state::{Action, Event, Popup, State},
     services::{self, AudioCommand, DisplayCommand},
     settings_worker::{self, Command},
     time_input::TimeInput,
@@ -93,27 +93,41 @@ fn now() -> u64 {
 }
 /// Polls expiry and refreshes the timer texts. Notifies (balloon, never a focus-stealing
 /// panel) exactly once per expiry: `Countdown::poll_expired` latches.
+///
+/// No `RefCell` borrow may be held across `tray::notify`: `Shell_NotifyIconW` is a
+/// cross-process call that dispatches incoming sent messages (e.g. `WM_POWERBROADCAST` ->
+/// `Resumed` -> this function again). A re-entrant call finds the countdown borrowed and skips.
 fn update_timers(
     a: &MainWindow,
     countdown: &RefCell<Countdown>,
     stopwatch: &RefCell<Stopwatch>,
     drift: &nexpanel::clock::DriftDetector,
 ) {
+    let (Ok(mut c), Ok(s)) = (countdown.try_borrow_mut(), stopwatch.try_borrow()) else {
+        return;
+    };
     drift.check();
     let t = now();
-    let mut c = countdown.borrow_mut();
-    if c.poll_expired(t) {
+    let expired = c.poll_expired(t);
+    if expired {
         a.set_expired(true);
-        if !tray::notify("NexPanel", "Timer abgelaufen") {
-            platform::alarm();
-        }
     }
     a.set_countdown_text(clock(c.remaining_ms(t).saturating_add(999)));
     a.set_countdown_running(c.is_running());
     a.set_countdown_active(c.is_started(t));
-    let s = stopwatch.borrow();
     a.set_stopwatch_text(clock(s.elapsed_ms(t)));
     a.set_stopwatch_running(s.is_running());
+    drop((c, s));
+    if expired {
+        // Focus Assist can swallow the balloon without any error: the banner must be the
+        // first thing the user sees when the panel is opened next (tab 2 = timer).
+        if !a.window().is_visible() {
+            a.set_tab(2);
+        }
+        if !tray::notify("NexPanel", "Timer abgelaufen") {
+            platform::alarm();
+        }
+    }
 }
 thread_local! {
     /// Slint images per icon key; built once on the UI thread, never touched elsewhere.
@@ -224,6 +238,41 @@ fn start_logging(args: &[String]) {
         env!("CARGO_PKG_VERSION")
     );
 }
+/// Startup failures have no console (`windows_subsystem`): log them and tell the user.
+fn startup_error<E: std::fmt::Display>(
+    what: &'static str,
+    silent: bool,
+) -> impl FnOnce(E) -> Box<dyn std::error::Error> {
+    move |error| {
+        let message = format!("{what}: {error}");
+        log::error!("Start fehlgeschlagen: {message}");
+        if !silent {
+            report_startup_error(&message);
+        }
+        message.into()
+    }
+}
+#[cfg(windows)]
+fn report_startup_error(message: &str) {
+    use windows::{
+        Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
+        core::{PCWSTR, w},
+    };
+    let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `message` is NUL terminated and outlives the call.
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR(message.as_ptr()),
+            w!("NexPanel – Start fehlgeschlagen"),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+#[cfg(not(windows))]
+fn report_startup_error(message: &str) {
+    eprintln!("{message}");
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mode = parse_arguments(&args)?;
@@ -257,7 +306,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instance = if capture_mode {
         None
     } else {
-        match platform::Instance::acquire(mode != Mode::Normal(true))? {
+        match platform::Instance::acquire(mode != Mode::Normal(true))
+            .map_err(startup_error("Instanzprüfung fehlgeschlagen", false))?
+        {
             Some(instance) => Some(instance),
             None => return Ok(()),
         }
@@ -279,8 +330,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 attributes
             }
         })
-        .select()?;
-    let app = MainWindow::new()?;
+        .select()
+        .map_err(startup_error(
+            "Fenster-Backend nicht verfügbar",
+            capture_mode,
+        ))?;
+    let app = MainWindow::new().map_err(startup_error(
+        "Fenster konnte nicht erstellt werden",
+        capture_mode,
+    ))?;
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     let (dtx, drx, display_crashed) = services::display::spawn();
     let (atx, arx, audio_crashed) = services::audio::spawn();
@@ -365,54 +423,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tray = if capture_mode {
         None
     } else {
-        Some(tray::TrayHost::new(
-            Box::new({
-                let weak = app.as_weak();
-                let popup = popup.clone();
-                let timer_check = timer_check.clone();
-                let display_changes = dtx.clone();
-                let tick_body = tick_body.clone();
-                move |event| {
-                    let Some(app) = weak.upgrade() else {
-                        return;
-                    };
-                    match event {
-                        TrayEvent::Toggle => dispatch(&app, &popup, Event::TrayToggle, ms()),
-                        TrayEvent::Open => dispatch(&app, &popup, Event::TrayOpen, ms()),
-                        TrayEvent::Settings => {
-                            app.set_tab(3);
-                            dispatch(&app, &popup, Event::TrayOpen, ms());
-                        }
-                        TrayEvent::ToggleAutostart => {
-                            // Same path as the checkbox in the settings tab.
-                            app.set_autostart(!app.get_autostart());
-                            app.invoke_save_settings();
-                        }
-                        TrayEvent::NotificationClicked => {
-                            app.set_tab(2);
-                            dispatch(&app, &popup, Event::ShowRequested, ms());
-                        }
-                        TrayEvent::Resumed => {
-                            if let Some(check) = timer_check.borrow().as_ref() {
-                                check();
+        Some(
+            tray::TrayHost::new(
+                Box::new({
+                    let weak = app.as_weak();
+                    let popup = popup.clone();
+                    let timer_check = timer_check.clone();
+                    let display_changes = dtx.clone();
+                    let tick_body = tick_body.clone();
+                    move |event| {
+                        let Some(app) = weak.upgrade() else {
+                            return;
+                        };
+                        match event {
+                            TrayEvent::Toggle => dispatch(&app, &popup, Event::TrayToggle, ms()),
+                            TrayEvent::Open => dispatch(&app, &popup, Event::TrayOpen, ms()),
+                            TrayEvent::Settings => {
+                                app.set_tab(3);
+                                dispatch(&app, &popup, Event::TrayOpen, ms());
+                            }
+                            // Before the first settings snapshot the save would be discarded
+                            // while the property flips: ignore the click.
+                            TrayEvent::ToggleAutostart if !app.get_settings_ready() => {}
+                            TrayEvent::ToggleAutostart => {
+                                // Same path as the checkbox in the settings tab.
+                                app.set_autostart(!app.get_autostart());
+                                app.invoke_save_settings();
+                            }
+                            TrayEvent::NotificationClicked => {
+                                app.set_tab(2);
+                                dispatch(&app, &popup, Event::ShowRequested, ms());
+                            }
+                            TrayEvent::Resumed => {
+                                if let Some(check) = timer_check.borrow().as_ref() {
+                                    check();
+                                }
+                            }
+                            TrayEvent::DisplayChange => {
+                                let _ = display_changes.send(DisplayCommand::TopologyChanged);
+                            }
+                            TrayEvent::Quit => {
+                                let _ = slint::quit_event_loop();
                             }
                         }
-                        TrayEvent::DisplayChange => {
-                            let _ = display_changes.send(DisplayCommand::TopologyChanged);
-                        }
-                        TrayEvent::Quit => {
-                            let _ = slint::quit_event_loop();
-                        }
+                        // Panel may have been shown: refresh visibility, tick rate and snapshots now.
+                        wake(&tick_body);
                     }
-                    // Panel may have been shown: refresh visibility, tick rate and snapshots now.
-                    wake(&tick_body);
-                }
-            }),
-            Box::new({
-                let weak = app.as_weak();
-                move || weak.upgrade().is_some_and(|app| app.get_autostart())
-            }),
-        )?)
+                }),
+                Box::new({
+                    let weak = app.as_weak();
+                    move || weak.upgrade().is_some_and(|app| app.get_autostart())
+                }),
+            )
+            .map_err(startup_error(
+                "Tray-Icon konnte nicht erstellt werden",
+                false,
+            ))?,
+        )
     };
     app.on_refresh_display({
         let tx = dtx.clone();
@@ -714,7 +781,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dispatch(&a, &tick_popup, Event::ShowRequested, ms());
             }
             update_timers(&a, &countdown, &stopwatch, &drift);
-            let active = a.window().is_visible();
+            let mut active = a.window().is_visible();
+            // Window hidden from outside: reconcile, or the next toggle would hide nothing.
+            if !active && tick_popup.borrow().state() != State::Closed {
+                tick_popup.borrow_mut().handle(Event::HideDone, ms());
+            }
+            // Fallback for a missed blur (grace period, shell stole activation) and for
+            // press evidence that no toggle will ever redeem.
+            let focused = !active || !a.get_focus_close() || tray::is_foreground(a.window());
+            let tray_pressed =
+                tick_popup.borrow().needs_press_state(focused) && tray::tray_pressed();
+            dispatch(
+                &a,
+                &tick_popup,
+                Event::Tick {
+                    focused,
+                    tray_pressed,
+                },
+                ms(),
+            );
+            active = a.window().is_visible();
             if visible != Some(active) {
                 visible = Some(active);
                 let _ = dtx.send(DisplayCommand::SetActive(active));
