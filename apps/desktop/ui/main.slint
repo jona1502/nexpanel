@@ -68,7 +68,7 @@ component AppIcon inherits Rectangle {
 }
 export component MainWindow inherits Window {
  init => { Palette.color-scheme = ColorScheme.dark; }
- title:"NexPanel"; preferred-width:392px; preferred-height:440px; min-width:0px; min-height:0px; no-frame:true; always-on-top:true;
+ title:"NexPanel"; preferred-width:392px; preferred-height:440px; min-width:392px; min-height:440px; max-width:392px; max-height:440px; no-frame:true; always-on-top:true;
  background:#181a20; default-font-family:"Segoe UI"; default-font-size:13px;
  in-out property<int> tab:0;
  in property<string> app-version;
@@ -124,11 +124,13 @@ export component MainWindow inherits Window {
  }
  Rectangle {height:1px;background:#343640;}
  if root.tab==1: VerticalLayout {vertical-stretch:1;spacing:6px;
- HorizontalLayout {height:26px;padding-left:4px;padding-right:4px;spacing:6px;
+ Rectangle {height:28px;border-radius:6px;background:hdr.has-hover?#1f222b:transparent;
+ HorizontalLayout {padding-left:4px;padding-right:4px;spacing:6px;
  Text{text:root.audio-device;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;vertical-alignment:center;}
  Rectangle {width:24px;
-  Path{x:6px;y:9px;width:12px;height:7px;viewbox-width:12;viewbox-height:7;fill:transparent;stroke:#b6bdcc;stroke-width:1.4px;commands:root.apps-open?"M1 6 L6 1 L11 6":"M1 1 L6 6 L11 1";}
-  TouchArea{mouse-cursor:pointer;clicked=>{root.apps-open=!root.apps-open;}}}
+  Path{x:6px;y:10px;width:12px;height:7px;viewbox-width:12;viewbox-height:7;fill:transparent;stroke:#b6bdcc;stroke-width:1.4px;commands:root.apps-open?"M1 6 L6 1 L11 6":"M1 1 L6 6 L11 1";}}
+ }
+ hdr := TouchArea{mouse-cursor:pointer;clicked=>{root.apps-open=!root.apps-open;}}
  }
  if root.audio-status!="": Hint{text:root.audio-status;}
  if root.audio.length==0: Hint{text:"Kein Audiogerät verfügbar";horizontal-alignment:center;}
@@ -143,8 +145,9 @@ export component MainWindow inherits Window {
  Text{width:44px;text:row.value;color:row.muted?#8a8d99:#f3f4f8;font-size:22px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
- if root.apps-open: Rectangle {vertical-stretch:1;background:#13151a;border-radius:8px;
- ScrollView {
+ // Always present so the layout (and thus the fixed window) never depends on the collapsed state.
+ Rectangle {vertical-stretch:1;background:root.apps-open?#13151a:transparent;border-radius:8px;
+ ScrollView {visible:root.apps-open;
  VerticalLayout {alignment:start;padding-top:4px;padding-bottom:4px;
  for row in root.audio: Rectangle {height:row.master?0px:36px;visible:!row.master;
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
