@@ -337,9 +337,9 @@ impl Instance {
             core::w,
         };
         unsafe {
-            let mutex = CreateMutexW(None, false, w!("Local\\NexPanel.Panel.0.1"))?;
+            let mutex = CreateMutexW(None, false, w!("Local\\NexPanel.Panel"))?;
             let exists = GetLastError() == ERROR_ALREADY_EXISTS;
-            let open = match CreateEventW(None, false, false, w!("Local\\NexPanel.Open.0.1")) {
+            let open = match CreateEventW(None, false, false, w!("Local\\NexPanel.Open")) {
                 Ok(h) => h,
                 Err(e) => {
                     let _ = CloseHandle(mutex);
