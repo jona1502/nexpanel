@@ -1,0 +1,19 @@
+[package]
+name = "ddc-spike"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.1"
+publish = false
+
+[dependencies]
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Devices_Display",
+    "Win32_System_Com",
+    "Win32_System_Wmi",
+    "Win32_System_Variant",
+    "Win32_System_Ole",
+    "Win32_System_Rpc",
+    "Win32_Security",
+] }
