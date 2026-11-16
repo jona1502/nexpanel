@@ -88,6 +88,44 @@ pub fn popup_bounds_at(area: Area, anchor: Anchor, scale: f64) -> PopupBounds {
         logical_size: (size.0 as f64 / scale, size.1 as f64 / scale),
     }
 }
+/// Tool windows get no Alt-Tab entry; `WS_EX_APPWINDOW` would force one (ADR-002).
+fn tool_window_style(ex_style: u32, tool: u32, app: u32) -> u32 {
+    (ex_style | tool) & !app
+}
+/// Sets `WS_EX_TOOLWINDOW` and clears `WS_EX_APPWINDOW` on the popup's `HWND`. Cheap and
+/// idempotent, so call it after every show in case winit reset the style.
+#[cfg(windows)]
+pub fn hide_from_alt_tab(window: &slint::Window) {
+    use slint::winit_030::{
+        WinitWindowAccessor,
+        winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
+    };
+    window.with_winit_window(|native| {
+        let Ok(handle) = native.window_handle() else {
+            return;
+        };
+        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+            apply_tool_window_style(windows::Win32::Foundation::HWND(h.hwnd.get() as *mut _));
+        }
+    });
+}
+#[cfg(windows)]
+fn apply_tool_window_style(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    // SAFETY: `hwnd` belongs to the live popup window of this thread; only its extended style
+    // word is read and written.
+    unsafe {
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let wanted = tool_window_style(current as u32, WS_EX_TOOLWINDOW.0, WS_EX_APPWINDOW.0);
+        if wanted != current as u32 {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted as isize);
+        }
+    }
+}
+#[cfg(not(windows))]
+pub fn hide_from_alt_tab(_: &slint::Window) {}
 #[cfg(windows)]
 pub fn position(window: &slint::Window) {
     use slint::winit_030::WinitWindowAccessor;
@@ -443,6 +481,14 @@ mod tests {
         let work = rect(-1920, 0, 0, 1032);
         let b = popup_bounds_at(work, Anchor::Icon(rect(-40, 1032, -16, 1080)), 1.0);
         assert_eq!(b.position, (-408, 404));
+    }
+    #[test]
+    fn tool_style_sets_toolwindow_and_clears_appwindow() {
+        const TOOL: u32 = 0x80;
+        const APP: u32 = 0x4_0000;
+        assert_eq!(tool_window_style(APP | 0x8, TOOL, APP), TOOL | 0x8);
+        assert_eq!(tool_window_style(TOOL, TOOL, APP), TOOL);
+        assert_eq!(tool_window_style(0, TOOL, APP), TOOL);
     }
     #[test]
     fn quotes_autostart_path() {

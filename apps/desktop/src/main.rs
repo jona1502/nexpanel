@@ -61,6 +61,7 @@ fn clock(ms: u64) -> slint::SharedString {
 }
 fn show(app: &MainWindow) {
     let _ = app.show();
+    platform::hide_from_alt_tab(app.window());
     platform::position(app.window());
     app.window().with_winit_window(|w| w.focus_window());
 }
