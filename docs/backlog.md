@@ -40,8 +40,8 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 - [x] Idle-Wakeups reduzieren: Der 200-ms-Tick läuft nur noch bei sichtbarem Panel (verborgen 1 s, Countdown per One-Shot).
 - [x] Hotplug über `WM_DISPLAYCHANGE` statt 4-s-Polling erkennen (Sicherheitspoll 30/60 s, Helligkeit nur bei sichtbarem Panel).
 - [x] `StartupApproved` auswerten, `deny_unknown_fields` lockern, vor dem Reset ein Backup der korrupten Datei anlegen.
-- [ ] Esc soll offene ComboBox-Popups schließen, nicht das ganze Panel. (Nicht umgesetzt: Popup-Zustand nicht abfragbar, siehe docs/testing.md.)
 - [x] Tray-Icon in mehreren Größen (16/20/24/32): `tray.rs` wählt per `SM_CXSMICON` (DPI-abhängig) und `platform::pick_icon_px`; Neuwahl bei `TaskbarCreated` und `WM_DISPLAYCHANGE`.
+- [x] Esc schließt ein offenes Dropdown, nicht das ganze Panel. (Eigenes `Dropdown` statt Std-ComboBox, siehe docs/testing.md.)
 - [x] Display- und Audio-Worker beim Beenden joinen.
 - [ ] Integrationstests ergänzen.
 
