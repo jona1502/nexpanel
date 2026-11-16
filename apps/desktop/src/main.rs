@@ -17,7 +17,7 @@ use slint::{
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, mpsc::Sender},
     time::{Duration, Instant},
 };
 slint::include_modules!();
@@ -45,19 +45,45 @@ fn parse_arguments(args: &[String]) -> Result<Mode, &'static str> {
     }
 }
 /// Tab indices in `main.slint` (`for label[i] in [...]`, `root.tab==N`).
-const TAB_TIMER: i32 = 2;
-const TAB_SYSTEM: i32 = 3;
+/// Order: Audio, Display, System, Zeit, Einstellungen.
+///
+/// The panel shows the tab that was open when it was last closed (kept in memory while the
+/// app runs, persisted as `last_tab` in settings.json across restarts). Exceptions that
+/// override the remembered tab for one opening: timer expiry while hidden and a balloon
+/// click select `TAB_TIMER`, the tray menu "Einstellungen" selects `TAB_SETTINGS`. The
+/// overriding tab is remembered again when the panel closes.
+const TAB_AUDIO: i32 = 0;
+const TAB_SYSTEM: i32 = 2;
+const TAB_TIMER: i32 = 3;
 const TAB_SETTINGS: i32 = 4;
-const TAB_COUNT: usize = 5;
 /// Fixed logical panel size; must equal the fixed size in `main.slint`.
 #[cfg(test)]
 const PANEL_SIZE: (u32, u32) = (392, 440);
+const TAB_COUNT: usize = nexpanel::config::TAB_COUNT as usize;
+/// Out-of-range values (corrupt or newer settings file) fall back to the Audio tab.
+fn sanitize_tab(tab: u8) -> i32 {
+    if usize::from(tab) < TAB_COUNT {
+        i32::from(tab)
+    } else {
+        TAB_AUDIO
+    }
+}
+/// Persist the current tab through the settings worker if it changed since the last save.
+/// Never saves before the first snapshot or while the file is blocked (corrupt).
+fn save_tab_if_changed(app: &MainWindow, tx: &Sender<Command>, saved: &Cell<i32>) {
+    let tab = app.get_tab();
+    if tab == saved.get() || !app.get_settings_ready() || app.get_settings_blocked() {
+        return;
+    }
+    saved.set(tab);
+    let _ = tx.send(Command::Save(config_from(app)));
+}
 fn capture_name(tab: usize) -> &'static str {
     [
-        "01-displays.png",
-        "02-audio.png",
-        "03-zeit.png",
-        "04-system.png",
+        "01-audio.png",
+        "02-displays.png",
+        "03-system.png",
+        "04-zeit.png",
         "05-einstellungen.png",
     ][tab]
 }
@@ -147,7 +173,7 @@ fn update_timers(
     drop((c, s));
     if expired {
         // Focus Assist can swallow the balloon without any error: the banner must be the
-        // first thing the user sees when the panel is opened next (tab 2 = timer).
+        // first thing the user sees when the panel is opened next (TAB_TIMER).
         if !a.window().is_visible() {
             a.set_tab(TAB_TIMER);
         }
@@ -234,6 +260,8 @@ fn config_from(app: &MainWindow) -> Config {
         close_on_focus_loss: app.get_focus_close(),
         linked_displays: app.get_linked(),
         autostart: app.get_autostart(),
+        last_tab: u8::try_from(sanitize_tab(u8::try_from(app.get_tab()).unwrap_or(u8::MAX)))
+            .unwrap_or(0),
     }
 }
 fn apply_config(app: &MainWindow, c: &Config) {
@@ -385,6 +413,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (atx, arx, audio_crashed) = services::audio::spawn();
     let (ytx, yrx, system_crashed) = services::system::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
+    // Last tab written to settings.json (or loaded from it); see `save_tab_if_changed`.
+    let saved_tab = Rc::new(Cell::new(TAB_AUDIO));
+    let tab_restored = Rc::new(Cell::new(false));
     let tick_body: TickBody = Rc::new(RefCell::new(Box::new(|| {})));
     // Persistent models: rows are updated in place so a dragged slider survives.
     let display_model = Rc::new(VecModel::<DisplayRow>::default());
@@ -487,6 +518,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let timer_check = timer_check.clone();
                     let display_changes = dtx.clone();
                     let tick_body = tick_body.clone();
+                    let quit_tx = stx.clone();
+                    let saved_tab = saved_tab.clone();
                     move |event| {
                         let Some(app) = weak.upgrade() else {
                             return;
@@ -519,6 +552,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = display_changes.send(DisplayCommand::TopologyChanged);
                             }
                             TrayEvent::Quit => {
+                                if !capture_mode {
+                                    save_tab_if_changed(&app, &quit_tx, &saved_tab);
+                                }
                                 let _ = slint::quit_event_loop();
                             }
                         }
@@ -751,6 +787,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
     let tick_popup = popup.clone();
+    let tab_tx = stx.clone();
     let mut visible = None;
     let mut crash_shown = (false, false, false);
     let mut system_active = None;
@@ -840,6 +877,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(s) = srx.try_iter().last() {
                 apply_config(&a, &s.config);
+                // First snapshot only: restore the remembered tab unless an override
+                // (balloon click, tray "Einstellungen", timer expiry) already chose one.
+                if !tab_restored.replace(true) && !capture_mode {
+                    saved_tab.set(sanitize_tab(s.config.last_tab));
+                    if a.get_tab() == TAB_AUDIO {
+                        a.set_tab(saved_tab.get());
+                    }
+                }
                 a.set_settings_error(s.error.into());
                 a.set_settings_blocked(s.blocked);
                 a.set_settings_ready(true);
@@ -874,6 +919,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 visible = Some(active);
                 let _ = dtx.send(DisplayCommand::SetActive(active));
                 let _ = atx.send(AudioCommand::SetActive(active));
+                // Panel just closed: remember the tab (only written if it changed).
+                if !active && !capture_mode {
+                    save_tab_if_changed(&a, &tab_tx, &saved_tab);
+                }
             }
             // Sample only while the panel is visible AND the System tab is shown.
             let want_system = active && a.get_tab() == TAB_SYSTEM;
@@ -1101,10 +1150,10 @@ mod tests {
         assert_eq!(
             (0..TAB_COUNT).map(capture_name).collect::<Vec<_>>(),
             vec![
-                "01-displays.png",
-                "02-audio.png",
-                "03-zeit.png",
-                "04-system.png",
+                "01-audio.png",
+                "02-displays.png",
+                "03-system.png",
+                "04-zeit.png",
                 "05-einstellungen.png"
             ]
         );
@@ -1136,7 +1185,7 @@ mod tests {
     fn tab_constants_match_slint() {
         let ui = include_str!("../ui/main.slint");
         let compact: String = ui.split_whitespace().collect();
-        assert!(compact.contains(r#"["Displays","Audio","Zeit","System","Einstellungen"]"#));
+        assert!(compact.contains(r#"["Audio","Displays","System","Zeit","Einstellungen"]"#));
         for i in 0..TAB_COUNT {
             assert!(compact.contains(&format!("root.tab=={i}:")), "tab {i}");
         }
@@ -1149,6 +1198,21 @@ mod tests {
         assert!(compact.contains(&format!(
             "root.tab=={TAB_TIMER}:VerticalLayout{{spacing:8px"
         )));
-        assert_eq!((TAB_TIMER, TAB_SYSTEM, TAB_SETTINGS), (2, 3, 4));
+        assert!(compact.contains(&format!(
+            "root.tab=={TAB_AUDIO}:VerticalLayout{{vertical-stretch:1"
+        )));
+        assert_eq!(
+            (TAB_AUDIO, TAB_SYSTEM, TAB_TIMER, TAB_SETTINGS),
+            (0, 2, 3, 4)
+        );
+    }
+    #[test]
+    fn sanitize_tab_clamps_out_of_range_to_audio() {
+        for valid in 0..TAB_COUNT as u8 {
+            assert_eq!(sanitize_tab(valid), i32::from(valid));
+        }
+        for invalid in [TAB_COUNT as u8, 6, 255] {
+            assert_eq!(sanitize_tab(invalid), TAB_AUDIO);
+        }
     }
 }
