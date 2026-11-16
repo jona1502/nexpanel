@@ -58,9 +58,19 @@ Nur manuell prüfbar; nicht automatisiert.
 4. Standby kürzer als Restzeit: Restzeit nach dem Aufwachen entspricht der Restzeit minus Standbydauer (Standby zählt mit).
 5. Systemuhr: Countdown 2 min und Stoppuhr starten, Systemzeit um 1 h vor bzw. zurück stellen. Restzeit und Stoppuhr laufen unverändert weiter; `nexpanel.log` enthält eine Warnung „Systemuhr sprang um … ms“.
 
+## DDC/CI-Erkennung ohne Capabilities-Flag (manuell)
+
+| Schritt | Erwartung |
+|---|---|
+| Alle drei Monitore (27G1G4, CQ32G4, MD20831) angeschlossen, App starten, Display-Tab öffnen | Alle drei zeigen Status „DDC/CI“ mit Slider, keiner „nicht verfügbar“ |
+| Slider jedes Monitors bewegen | Nur dieser Monitor ändert die Helligkeit; Wert bleibt nach Panel-Neuöffnen |
+| `nexpanel.exe --diagnostics` (nur lesend) | Alle drei mit `brightness: Some(..)` und Status `DDC/CI` |
+| Monitor ohne MC_CAPS_BRIGHTNESS-Flag (`ddc-spike list` zeigt `caps=0x0`, `GetMonitorCapabilities ok=false`) | Trotzdem regelbar; Erkennung stützt sich auf `GetMonitorBrightness`, dann VCP 0x10 |
+| Monitor mit DDC/CI im OSD ausschalten | Status „DDC/CI: Monitor antwortet nicht (VCP 0x10)“ statt der allgemeinen Meldung |
+
 ## Noch nicht empirisch bewiesen
 
-Native Tray-Klicks, Esc/Fokusübergänge, mehrere DPI-/Taskleistenkonfigurationen, echte Hardware-Schreibzugriffe einschließlich Wiederherstellung, WMI-Schreiben, Betriebssystem-Schlaf, Hotplug, reale Audio-Gerätewechsel und fremde Rechner. Zwei erkannte Monitore dieses Systems erlauben keine DDC-Helligkeitsregelung; das ist sichtbar und keine behauptete gelöste Treiberbeschränkung.
+Native Tray-Klicks, Esc/Fokusübergänge, mehrere DPI-/Taskleistenkonfigurationen, echte Hardware-Schreibzugriffe einschließlich Wiederherstellung, WMI-Schreiben, Betriebssystem-Schlaf, Hotplug, reale Audio-Gerätewechsel und fremde Rechner. Die frühere Annahme, 27G1G4 und CQ32G4 erlaubten keine DDC-Regelung, war ein Erkennungsfehler (siehe Abschnitt DDC/CI-Erkennung); Schreibzugriffe auf diese Monitore sind noch nicht manuell bestätigt.
 
 Langsame synchrone DDC-/WMI-Treiber können den jeweiligen Worker blockieren; kein harter abbrechbarer Treibertimeout. UI bleibt vom Worker getrennt. Audio aktualisiert per Polling. Tray-Positionierung nutzt den Cursor-Monitor als dokumentierten Fallback, nicht private Tray-Icon-Geometrie. Das Panel wird bei hoher DPI oder kleinen Arbeitsbereichen auf die verfügbare Fläche mit Rand verkleinert; Inhalte bleiben scrollbar. Countdown und Stoppuhr laufen auf der monotonen Uhr `QueryInterruptTime` (zählt Standby mit) und folgen Systemzeitsprüngen nicht; Sprünge > 2 s werden als Warnung geloggt. Timerzustand wird nicht über App-Neustarts gespeichert.
 
