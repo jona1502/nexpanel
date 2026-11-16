@@ -6,9 +6,10 @@ use nexpanel::{
     settings_worker::{self, Command},
     time_tools::{Countdown, Stopwatch},
     tray::{self, TrayEvent},
+    ui_models::{LocalHold, keep_held, reconcile},
 };
 use slint::{
-    ComponentHandle, ModelRc, VecModel,
+    ComponentHandle, Model, ModelRc, VecModel,
     winit_030::{EventResult, WinitWindowAccessor, winit},
 };
 use std::{
@@ -168,6 +169,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (dtx, drx) = services::display::spawn();
     let (atx, arx) = services::audio::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
+    // Persistent models: rows are updated in place so a dragged slider survives.
+    let display_model = Rc::new(VecModel::<DisplayRow>::default());
+    let audio_model = Rc::new(VecModel::<AudioItem>::default());
+    app.set_displays(ModelRc::from(display_model.clone()));
+    app.set_audio(ModelRc::from(audio_model.clone()));
+    // Rows the user is currently changing ignore worker values for a short time.
+    let display_hold = Rc::new(RefCell::new(LocalHold::default()));
+    let audio_hold = Rc::new(RefCell::new(LocalHold::default()));
     let last_blur = Rc::new(Cell::new(None::<Instant>));
     let weak = app.as_weak();
     let blur = last_blur.clone();
@@ -265,9 +274,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.on_brightness({
         let tx = dtx.clone();
         let weak = app.as_weak();
+        let (model, hold) = (display_model.clone(), display_hold.clone());
         move |id, value| {
             if capture_mode {
                 return;
+            }
+            hold.borrow_mut().touch(&id, Instant::now());
+            if let Some(i) = model.iter().position(|r| r.id == id) {
+                let mut row = model.row_data(i).expect("row in range");
+                row.value = value.clamp(0, 100);
+                model.set_row_data(i, row);
             }
             let linked = weak.upgrade().is_some_and(|a| a.get_linked());
             let value = value.clamp(0, 100) as u8;
@@ -283,9 +299,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     app.on_volume({
         let tx = atx.clone();
+        let (model, hold) = (audio_model.clone(), audio_hold.clone());
         move |id, value| {
             if capture_mode {
                 return;
+            }
+            hold.borrow_mut().touch(&id, Instant::now());
+            if let Some(i) = model.iter().position(|r| r.id == id) {
+                let mut row = model.row_data(i).expect("row in range");
+                row.value = value.clamp(0, 100);
+                model.set_row_data(i, row);
             }
             let _ = tx.send(AudioCommand::SetVolume {
                 id: id.into(),
@@ -386,34 +409,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(s) = drx.try_iter().last() {
                 snapshot_ready.set((true, snapshot_ready.get().1));
                 a.set_display_status(s.status.into());
-                a.set_displays(ModelRc::new(VecModel::from(
-                    s.devices
-                        .into_iter()
-                        .map(|d| DisplayRow {
-                            id: d.id.into(),
-                            name: d.name.into(),
-                            value: d.brightness.unwrap_or(0) as i32,
-                            supported: d.brightness.is_some(),
-                            status: d.status.into(),
-                        })
-                        .collect::<Vec<_>>(),
-                )));
+                let mut rows: Vec<_> = s
+                    .devices
+                    .into_iter()
+                    .map(|d| DisplayRow {
+                        id: d.id.into(),
+                        name: d.name.into(),
+                        value: d.brightness.unwrap_or(0) as i32,
+                        supported: d.brightness.is_some(),
+                        status: d.status.into(),
+                    })
+                    .collect();
+                let mut hold = display_hold.borrow_mut();
+                keep_held(&*display_model, &mut rows, &mut hold, Instant::now(), |r| {
+                    r.id.clone()
+                });
+                reconcile(&*display_model, rows, |r| r.id.clone());
             }
             if let Some(s) = arx.try_iter().last() {
                 snapshot_ready.set((snapshot_ready.get().0, true));
                 a.set_audio_status(s.status.into());
-                a.set_audio(ModelRc::new(VecModel::from(
-                    s.master
-                        .into_iter()
-                        .chain(s.sessions)
-                        .map(|r| AudioItem {
-                            id: r.id.into(),
-                            name: r.name.into(),
-                            value: r.volume as i32,
-                            muted: r.muted,
-                        })
-                        .collect::<Vec<_>>(),
-                )));
+                let mut rows: Vec<_> = s
+                    .master
+                    .into_iter()
+                    .chain(s.sessions)
+                    .map(|r| AudioItem {
+                        id: r.id.into(),
+                        name: r.name.into(),
+                        value: r.volume as i32,
+                        muted: r.muted,
+                    })
+                    .collect();
+                let mut hold = audio_hold.borrow_mut();
+                keep_held(&*audio_model, &mut rows, &mut hold, Instant::now(), |r| {
+                    r.id.clone()
+                });
+                reconcile(&*audio_model, rows, |r| r.id.clone());
             }
             if let Some(s) = srx.try_iter().last() {
                 apply_config(&a, &s.config);
