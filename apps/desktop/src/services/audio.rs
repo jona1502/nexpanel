@@ -1,9 +1,9 @@
 //! Core Audio interfaces never leave their owning worker thread.
-use super::{AudioCommand, AudioRow, AudioSnapshot};
+use super::{AudioChange, AudioCommand, AudioRow, AudioSnapshot};
 use std::{
     collections::BTreeMap,
     sync::mpsc::{self, Receiver, Sender},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 struct Member<T> {
@@ -96,6 +96,109 @@ fn apply_group<T>(
     failure.map_or(Ok(()), Err)
 }
 
+/// Recompute the aggregated row of a group after member volumes changed in place.
+fn recompute<T>(group: &mut Group<T>) {
+    group.row.volume = group
+        .members
+        .iter()
+        .map(|m| normalized(m.volume))
+        .max()
+        .unwrap_or(0);
+    group.row.muted = group.members.iter().all(|m| m.muted);
+}
+
+/// What the worker has to re-read. Set by COM callbacks (via `AudioChange`) and by writes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Dirty(u8);
+impl Dirty {
+    /// Default device or device set changed: rebuild everything and re-register.
+    const REDISCOVER: Dirty = Dirty(1);
+    /// Session list changed: re-enumerate sessions.
+    const SESSIONS: Dirty = Dirty(2);
+    /// Volume or mute of existing sessions changed.
+    const VALUES: Dirty = Dirty(4);
+    /// Master volume or mute changed.
+    const ENDPOINT: Dirty = Dirty(8);
+    const ALL: Dirty = Dirty(15);
+    fn has(self, other: Dirty) -> bool {
+        self.0 & other.0 != 0
+    }
+    fn insert(&mut self, other: Dirty) {
+        self.0 |= other.0;
+    }
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+    fn take(&mut self) -> Dirty {
+        std::mem::take(self)
+    }
+}
+fn dirty_for(change: AudioChange) -> Dirty {
+    match change {
+        AudioChange::Device => Dirty::REDISCOVER,
+        AudioChange::Sessions => Dirty::SESSIONS,
+        AudioChange::SessionValues => Dirty::VALUES,
+        AudioChange::Endpoint => Dirty::ENDPOINT,
+    }
+}
+/// Only the default multimedia render endpoint is shown.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn default_change_relevant(render: bool, multimedia: bool) -> bool {
+    render && multimedia
+}
+
+const DEBOUNCE: Duration = Duration::from_millis(40);
+const MAX_DEBOUNCE: Duration = Duration::from_millis(250);
+/// Safety net only; normal updates are event driven.
+const FALLBACK: Duration = Duration::from_secs(30);
+
+/// Everything absorbed during one wake-up of the worker.
+#[derive(Default)]
+struct Pending {
+    dirty: Dirty,
+    writes: Vec<AudioCommand>,
+    active: Option<bool>,
+    shutdown: bool,
+    /// Explicit user action (write or refresh): never delayed by debouncing.
+    urgent: bool,
+}
+impl Pending {
+    fn absorb(&mut self, command: AudioCommand) {
+        match command {
+            AudioCommand::Shutdown => self.shutdown = true,
+            AudioCommand::SetActive(value) => self.active = Some(value),
+            AudioCommand::SetVolume { id, value } => {
+                // Last value for a target wins, while mute commands retain order.
+                self.writes
+                    .retain(|c| !matches!(c, AudioCommand::SetVolume{id:old,..} if old == &id));
+                self.writes.push(AudioCommand::SetVolume {
+                    id,
+                    value: normalized(value),
+                });
+                self.urgent = true;
+            }
+            AudioCommand::SetMute { .. } => {
+                self.writes.push(command);
+                self.urgent = true;
+            }
+            AudioCommand::Refresh => {
+                self.dirty.insert(Dirty::ALL);
+                self.urgent = true;
+            }
+            AudioCommand::Changed(change) => self.dirty.insert(dirty_for(change)),
+        }
+    }
+}
+/// How much longer to wait for further events before processing, `None` = process now.
+/// Bursts of events are merged, but never delayed beyond `MAX_DEBOUNCE`.
+fn debounce_wait(pending: &Pending, since_first: Duration) -> Option<Duration> {
+    if pending.urgent || pending.shutdown || pending.dirty.is_empty() || since_first >= MAX_DEBOUNCE
+    {
+        return None;
+    }
+    Some(DEBOUNCE.min(MAX_DEBOUNCE - since_first))
+}
+
 pub fn spawn() -> (
     Sender<AudioCommand>,
     Receiver<AudioSnapshot>,
@@ -104,16 +207,23 @@ pub fn spawn() -> (
     let (commands, input) = mpsc::channel();
     let (output, snapshots) = mpsc::channel();
     let crashed = crate::logging::CrashFlag::default();
-    crate::logging::spawn_worker("nexpanel-audio", &crashed, move || worker(input, output));
+    let events = commands.clone();
+    crate::logging::spawn_worker("nexpanel-audio", &crashed, move || {
+        worker(input, output, events)
+    });
     (commands, snapshots, crashed)
 }
 pub fn diagnose() -> AudioSnapshot {
     native::diagnose()
 }
 
-fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
+fn worker(
+    input: Receiver<AudioCommand>,
+    output: Sender<AudioSnapshot>,
+    events: Sender<AudioCommand>,
+) {
     let mut active = true;
-    let mut backend = match native::Backend::new() {
+    let mut backend = match native::Backend::new(Some(events)) {
         Ok(backend) => backend,
         Err(error) => {
             log::error!("Audio-Backend nicht verfügbar: {error}");
@@ -124,6 +234,7 @@ fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
             return;
         }
     };
+    backend.mark(Dirty::ALL);
     let mut last = backend.refresh();
     log::info!(
         "Audio-Erkennung: Master: {}, Sitzungen: {}, Status: '{}'",
@@ -134,41 +245,64 @@ fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
     if output.send(last.clone()).is_err() {
         return;
     }
+    // Changes seen while the panel is hidden; applied once it is shown again.
+    let mut deferred = Dirty::default();
     loop {
-        let interval = Duration::from_secs(if active { 1 } else { 5 });
-        let first = match input.recv_timeout(interval) {
-            Ok(command) => Some(command),
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        };
-        let mut pending = Vec::new();
-        if let Some(command) = first {
-            pending.push(command);
-        }
-        for command in input.try_iter().take(63) {
-            pending.push(command);
-        }
-        let mut writes = Vec::new();
-        for command in pending {
-            match command {
-                AudioCommand::Shutdown => return,
-                AudioCommand::SetActive(value) => active = value,
-                AudioCommand::SetVolume { id, value } => {
-                    // Last value for a target wins, while mute commands retain order.
-                    writes
-                        .retain(|c| !matches!(c, AudioCommand::SetVolume{id:old,..} if old == &id));
-                    writes.push(AudioCommand::SetVolume {
-                        id,
-                        value: normalized(value),
-                    });
+        let mut pending = Pending::default();
+        let first = if active {
+            match input.recv_timeout(FALLBACK) {
+                Ok(command) => Some(command),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    pending.dirty.insert(Dirty::ALL);
+                    None
                 }
-                AudioCommand::SetMute { .. } => writes.push(command),
-                AudioCommand::Refresh => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match input.recv() {
+                Ok(command) => Some(command),
+                Err(_) => return,
+            }
+        };
+        let started = Instant::now();
+        if let Some(command) = first {
+            pending.absorb(command);
+        }
+        loop {
+            for command in input.try_iter().take(256) {
+                pending.absorb(command);
+            }
+            let Some(wait) = debounce_wait(&pending, started.elapsed()) else {
+                break;
+            };
+            match input.recv_timeout(wait) {
+                Ok(command) => pending.absorb(command),
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
+        if pending.shutdown {
+            return;
+        }
+        if let Some(value) = pending.active {
+            if value && !active {
+                pending.dirty.insert(Dirty::ALL);
+            }
+            active = value;
+        }
+        let mut dirty = pending.dirty;
+        dirty.insert(deferred.take());
+        if !active && pending.writes.is_empty() {
+            deferred = dirty;
+            continue;
+        }
+        if dirty.is_empty() && pending.writes.is_empty() {
+            continue;
+        }
+        backend.mark(dirty);
         let snapshot = run_batch(
             &mut backend,
-            writes,
+            pending.writes,
             native::Backend::refresh,
             native::Backend::write,
         );
@@ -209,13 +343,20 @@ fn run_batch<B>(
 #[cfg(windows)]
 mod native {
     use super::*;
+    use std::collections::{HashMap, HashSet};
     use windows::{
         Win32::{
-            Foundation::{CloseHandle, HANDLE, S_OK},
-            Media::Audio::{Endpoints::IAudioEndpointVolume, *},
+            Foundation::{CloseHandle, HANDLE, PROPERTYKEY, S_OK},
+            Media::Audio::{
+                Endpoints::{
+                    IAudioEndpointVolume, IAudioEndpointVolumeCallback,
+                    IAudioEndpointVolumeCallback_Impl,
+                },
+                *,
+            },
             System::{Com::*, Threading::*},
         },
-        core::{Interface, PWSTR},
+        core::{Interface, PCWSTR, PWSTR, Ref, implement},
     };
     struct Com;
     impl Drop for Com {
@@ -266,64 +407,259 @@ mod native {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
     }
+
+    // Callbacks run on foreign COM threads. They only send a tiny message to the
+    // worker; no COM calls, no locks, no allocation beyond the channel node.
+    fn notify(tx: &Sender<AudioCommand>, change: AudioChange) {
+        let _ = tx.send(AudioCommand::Changed(change));
+    }
+    #[implement(IMMNotificationClient)]
+    struct DeviceEvents {
+        tx: Sender<AudioCommand>,
+    }
+    impl IMMNotificationClient_Impl for DeviceEvents_Impl {
+        fn OnDeviceStateChanged(&self, _: &PCWSTR, _: DEVICE_STATE) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Device);
+            Ok(())
+        }
+        fn OnDeviceAdded(&self, _: &PCWSTR) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Device);
+            Ok(())
+        }
+        fn OnDeviceRemoved(&self, _: &PCWSTR) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Device);
+            Ok(())
+        }
+        fn OnDefaultDeviceChanged(
+            &self,
+            flow: EDataFlow,
+            role: ERole,
+            _: &PCWSTR,
+        ) -> windows::core::Result<()> {
+            if default_change_relevant(flow == eRender, role == eMultimedia) {
+                notify(&self.tx, AudioChange::Device);
+            }
+            Ok(())
+        }
+        fn OnPropertyValueChanged(&self, _: &PCWSTR, _: &PROPERTYKEY) -> windows::core::Result<()> {
+            Ok(())
+        }
+    }
+    #[implement(IAudioEndpointVolumeCallback)]
+    struct EndpointEvents {
+        tx: Sender<AudioCommand>,
+    }
+    impl IAudioEndpointVolumeCallback_Impl for EndpointEvents_Impl {
+        fn OnNotify(&self, _: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Endpoint);
+            Ok(())
+        }
+    }
+    #[implement(IAudioSessionNotification)]
+    struct NewSessionEvents {
+        tx: Sender<AudioCommand>,
+    }
+    impl IAudioSessionNotification_Impl for NewSessionEvents_Impl {
+        fn OnSessionCreated(&self, _: Ref<IAudioSessionControl>) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Sessions);
+            Ok(())
+        }
+    }
+    #[implement(IAudioSessionEvents)]
+    struct SessionEvents {
+        tx: Sender<AudioCommand>,
+    }
+    impl IAudioSessionEvents_Impl for SessionEvents_Impl {
+        fn OnDisplayNameChanged(
+            &self,
+            _: &PCWSTR,
+            _: *const windows::core::GUID,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnIconPathChanged(
+            &self,
+            _: &PCWSTR,
+            _: *const windows::core::GUID,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnSimpleVolumeChanged(
+            &self,
+            _: f32,
+            _: windows::core::BOOL,
+            _: *const windows::core::GUID,
+        ) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::SessionValues);
+            Ok(())
+        }
+        fn OnChannelVolumeChanged(
+            &self,
+            _: u32,
+            _: *const f32,
+            _: u32,
+            _: *const windows::core::GUID,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnGroupingParamChanged(
+            &self,
+            _: *const windows::core::GUID,
+            _: *const windows::core::GUID,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnStateChanged(&self, _: AudioSessionState) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Sessions);
+            Ok(())
+        }
+        fn OnSessionDisconnected(
+            &self,
+            _: AudioSessionDisconnectReason,
+        ) -> windows::core::Result<()> {
+            notify(&self.tx, AudioChange::Sessions);
+            Ok(())
+        }
+    }
+    /// A registered per-session callback; unregisters itself before the COM objects go away.
+    struct SessionReg {
+        control: IAudioSessionControl,
+        events: IAudioSessionEvents,
+    }
+    impl Drop for SessionReg {
+        fn drop(&mut self) {
+            // Fails harmlessly for sessions that were already disconnected.
+            let _ = unsafe {
+                self.control
+                    .UnregisterAudioSessionNotification(&self.events)
+            };
+        }
+    }
+
     struct State {
         id: String,
         endpoint: IAudioEndpointVolume,
+        manager: IAudioSessionManager2,
         groups: Vec<Group<ISimpleAudioVolume>>,
+        master: AudioRow,
+        skipped: usize,
+        tx: Option<Sender<AudioCommand>>,
+        endpoint_cb: Option<IAudioEndpointVolumeCallback>,
+        session_cb: Option<IAudioSessionNotification>,
+        sessions: HashMap<String, SessionReg>,
     }
-    pub(super) struct Backend {
-        state: Option<State>,
-        enumerator: IMMDeviceEnumerator,
-        _com: Com,
-    }
-    impl Backend {
-        pub(super) fn new() -> Result<Self, String> {
-            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() }.map_err(error)?;
-            let com = Com;
-            let enumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
-                .map_err(error)?;
-            Ok(Self {
-                state: None,
-                enumerator,
-                _com: com,
-            })
+    impl Drop for State {
+        fn drop(&mut self) {
+            // Unregister before the interfaces are released, so no callback can
+            // outlive the objects it was registered on.
+            self.sessions.clear();
+            if let Some(cb) = self.session_cb.take() {
+                let _ = unsafe { self.manager.UnregisterSessionNotification(&cb) };
+            }
+            if let Some(cb) = self.endpoint_cb.take() {
+                let _ = unsafe { self.endpoint.UnregisterControlChangeNotify(&cb) };
+            }
         }
-        fn read(&self) -> windows::core::Result<(State, AudioSnapshot)> {
+    }
+    impl State {
+        fn build(
+            enumerator: &IMMDeviceEnumerator,
+            tx: Option<&Sender<AudioCommand>>,
+        ) -> windows::core::Result<State> {
             unsafe {
-                let device = self
-                    .enumerator
-                    .GetDefaultAudioEndpoint(eRender, eMultimedia)?;
+                let device = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia)?;
                 let id = Allocation(device.GetId()?).string();
                 let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
                 let manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None)?;
-                let sessions = manager.GetSessionEnumerator()?;
+                // Quirk: session notifications may not fire unless the enumerator was requested once.
+                let _ = manager.GetSessionEnumerator();
+                let mut state = State {
+                    master: AudioRow {
+                        id: format!("{id}|master"),
+                        name: "Standardausgabegerät".into(),
+                        volume: 0,
+                        muted: false,
+                    },
+                    id,
+                    endpoint,
+                    manager,
+                    groups: Vec::new(),
+                    skipped: 0,
+                    tx: tx.cloned(),
+                    endpoint_cb: None,
+                    session_cb: None,
+                    sessions: HashMap::new(),
+                };
+                if let Some(tx) = tx {
+                    let cb: IAudioEndpointVolumeCallback = EndpointEvents { tx: tx.clone() }.into();
+                    match state.endpoint.RegisterControlChangeNotify(&cb) {
+                        Ok(()) => state.endpoint_cb = Some(cb),
+                        Err(e) => log::warn!("Master-Lautstärke-Events nicht verfügbar: {e}"),
+                    }
+                    let cb: IAudioSessionNotification = NewSessionEvents { tx: tx.clone() }.into();
+                    match state.manager.RegisterSessionNotification(&cb) {
+                        Ok(()) => state.session_cb = Some(cb),
+                        Err(e) => log::warn!("Sitzungs-Events nicht verfügbar: {e}"),
+                    }
+                }
+                state.reenumerate()?;
+                state.reread_master()?;
+                Ok(state)
+            }
+        }
+        fn reread_master(&mut self) -> windows::core::Result<()> {
+            unsafe {
+                self.master.volume = percent(self.endpoint.GetMasterVolumeLevelScalar()?);
+                self.master.muted = self.endpoint.GetMute()?.as_bool();
+            }
+            Ok(())
+        }
+        /// Cheap path: existing sessions only changed volume or mute.
+        fn reread_values(&mut self) -> windows::core::Result<()> {
+            for group in &mut self.groups {
+                for member in &mut group.members {
+                    unsafe {
+                        member.volume = percent(member.control.GetMasterVolume()?);
+                        member.muted = member.control.GetMute()?.as_bool();
+                    }
+                }
+                recompute(group);
+            }
+            Ok(())
+        }
+        fn reenumerate(&mut self) -> windows::core::Result<()> {
+            unsafe {
+                let sessions = self.manager.GetSessionEnumerator()?;
                 let mut members = Vec::new();
+                let mut controls = Vec::new();
                 let mut skipped = 0;
                 for index in 0..sessions.GetCount()? {
-                    let result =
-                        (|| -> windows::core::Result<Option<Member<ISimpleAudioVolume>>> {
-                            let control = sessions.GetSession(index)?;
-                            if control.GetState()? == AudioSessionStateExpired {
-                                return Ok(None);
-                            }
-                            let extended: IAudioSessionControl2 = control.cast()?;
-                            let volume: ISimpleAudioVolume = control.cast()?;
-                            let instance =
-                                Allocation(extended.GetSessionInstanceIdentifier()?).string();
-                            if instance.is_empty() {
-                                return Ok(None);
-                            }
-                            let system = extended.IsSystemSoundsSession() == S_OK;
-                            let pid = extended.GetProcessId()?;
-                            let display = control
-                                .GetDisplayName()
-                                .map(|s| Allocation(s).string())
-                                .unwrap_or_default();
-                            let name = process_name(pid)
-                                .filter(|s| !s.is_empty())
-                                .or_else(|| (!display.trim().is_empty()).then_some(display))
-                                .unwrap_or_else(|| format!("Anwendung {pid}"));
-                            Ok(Some(Member {
+                    let result = (|| -> windows::core::Result<
+                        Option<(Member<ISimpleAudioVolume>, IAudioSessionControl)>,
+                    > {
+                        let control = sessions.GetSession(index)?;
+                        if control.GetState()? == AudioSessionStateExpired {
+                            return Ok(None);
+                        }
+                        let extended: IAudioSessionControl2 = control.cast()?;
+                        let volume: ISimpleAudioVolume = control.cast()?;
+                        let instance =
+                            Allocation(extended.GetSessionInstanceIdentifier()?).string();
+                        if instance.is_empty() {
+                            return Ok(None);
+                        }
+                        let system = extended.IsSystemSoundsSession() == S_OK;
+                        let pid = extended.GetProcessId()?;
+                        let display = control
+                            .GetDisplayName()
+                            .map(|s| Allocation(s).string())
+                            .unwrap_or_default();
+                        let name = process_name(pid)
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| (!display.trim().is_empty()).then_some(display))
+                            .unwrap_or_else(|| format!("Anwendung {pid}"));
+                        Ok(Some((
+                            Member {
                                 instance,
                                 pid,
                                 system,
@@ -331,57 +667,165 @@ mod native {
                                 volume: percent(volume.GetMasterVolume()?),
                                 muted: volume.GetMute()?.as_bool(),
                                 control: volume,
-                            }))
-                        })();
+                            },
+                            control,
+                        )))
+                    })();
                     match result {
-                        Ok(Some(member)) => members.push(member),
+                        Ok(Some((member, control))) => {
+                            members.push(member);
+                            controls.push(control);
+                        }
                         Ok(None) => {}
                         Err(_) => skipped += 1,
                     }
                 }
-                let groups = groups(&id, members);
-                let snapshot = AudioSnapshot {
-                    master: Some(AudioRow {
-                        id: format!("{id}|master"),
-                        name: "Standardausgabegerät".into(),
-                        volume: percent(endpoint.GetMasterVolumeLevelScalar()?),
-                        muted: endpoint.GetMute()?.as_bool(),
-                    }),
-                    sessions: groups.iter().map(|g| g.row.clone()).collect(),
-                    status: if skipped == 0 {
+                // Keep per-session event registrations in sync with the live sessions.
+                if let Some(tx) = &self.tx {
+                    let live: HashSet<&str> = members.iter().map(|m| m.instance.as_str()).collect();
+                    self.sessions
+                        .retain(|instance, _| live.contains(instance.as_str()));
+                    for (member, control) in members.iter().zip(controls) {
+                        if self.sessions.contains_key(&member.instance) {
+                            continue;
+                        }
+                        let events: IAudioSessionEvents = SessionEvents { tx: tx.clone() }.into();
+                        match control.RegisterAudioSessionNotification(&events) {
+                            Ok(()) => {
+                                self.sessions.insert(
+                                    member.instance.clone(),
+                                    SessionReg { control, events },
+                                );
+                            }
+                            Err(e) => log::warn!("Sitzungs-Events nicht registrierbar: {e}"),
+                        }
+                    }
+                }
+                self.groups = groups(&self.id, members);
+                self.skipped = skipped;
+            }
+            Ok(())
+        }
+    }
+
+    pub(super) struct Backend {
+        // Field order is drop order: state (unregisters its callbacks) first, COM last.
+        state: Option<State>,
+        failure: String,
+        dirty: Dirty,
+        tx: Option<Sender<AudioCommand>>,
+        client: Option<IMMNotificationClient>,
+        enumerator: IMMDeviceEnumerator,
+        _com: Com,
+    }
+    impl Drop for Backend {
+        fn drop(&mut self) {
+            if let Some(client) = self.client.take() {
+                let _ = unsafe {
+                    self.enumerator
+                        .UnregisterEndpointNotificationCallback(&client)
+                };
+            }
+            self.state = None;
+        }
+    }
+    impl Backend {
+        /// `events`: channel the COM callbacks signal on. `None` = read-only diagnostics.
+        pub(super) fn new(events: Option<Sender<AudioCommand>>) -> Result<Self, String> {
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() }.map_err(error)?;
+            let com = Com;
+            let enumerator: IMMDeviceEnumerator =
+                unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+                    .map_err(error)?;
+            let mut client = None;
+            if let Some(tx) = &events {
+                let cb: IMMNotificationClient = DeviceEvents { tx: tx.clone() }.into();
+                match unsafe { enumerator.RegisterEndpointNotificationCallback(&cb) } {
+                    Ok(()) => client = Some(cb),
+                    Err(e) => log::warn!("Geräte-Events nicht verfügbar: {e}"),
+                }
+            }
+            Ok(Self {
+                state: None,
+                failure: String::new(),
+                dirty: Dirty::ALL,
+                tx: events,
+                client,
+                enumerator,
+                _com: com,
+            })
+        }
+        pub(super) fn mark(&mut self, dirty: Dirty) {
+            self.dirty.insert(dirty);
+        }
+        fn rediscover(&mut self) {
+            // Drop the old state first: unregisters its callbacks.
+            self.state = None;
+            match State::build(&self.enumerator, self.tx.as_ref()) {
+                Ok(state) => {
+                    self.failure.clear();
+                    self.state = Some(state);
+                }
+                Err(e) => self.failure = error(e),
+            }
+        }
+        /// Apply pending dirty flags, reading only what changed.
+        fn sync(&mut self) {
+            let dirty = self.dirty.take();
+            if dirty.is_empty() {
+                return;
+            }
+            let Some(state) = self
+                .state
+                .as_mut()
+                .filter(|_| !dirty.has(Dirty::REDISCOVER))
+            else {
+                self.rediscover();
+                return;
+            };
+            let result = (|| {
+                if dirty.has(Dirty::SESSIONS) {
+                    state.reenumerate()?;
+                } else if dirty.has(Dirty::VALUES) {
+                    state.reread_values()?;
+                }
+                if dirty.has(Dirty::ENDPOINT) {
+                    state.reread_master()?;
+                }
+                Ok::<(), windows::core::Error>(())
+            })();
+            if let Err(e) = result {
+                log::warn!("Audio-Teilaktualisierung fehlgeschlagen, vollständige Erkennung: {e}");
+                self.rediscover();
+            }
+        }
+        fn snapshot(&self) -> AudioSnapshot {
+            match &self.state {
+                Some(state) => AudioSnapshot {
+                    master: Some(state.master.clone()),
+                    sessions: state.groups.iter().map(|g| g.row.clone()).collect(),
+                    status: if state.skipped == 0 {
                         String::new()
                     } else {
-                        format!("{skipped} Audio-Sitzung(en) konnten nicht gelesen werden.")
+                        format!(
+                            "{} Audio-Sitzung(en) konnten nicht gelesen werden.",
+                            state.skipped
+                        )
                     },
-                };
-                Ok((
-                    State {
-                        id,
-                        endpoint,
-                        groups,
-                    },
-                    snapshot,
-                ))
+                },
+                None => AudioSnapshot {
+                    status: self.failure.clone(),
+                    ..Default::default()
+                },
             }
         }
         pub(super) fn refresh(&mut self) -> AudioSnapshot {
-            match self.read() {
-                Ok((state, snapshot)) => {
-                    self.state = Some(state);
-                    snapshot
-                }
-                Err(e) => {
-                    self.state = None;
-                    AudioSnapshot {
-                        status: error(e),
-                        ..Default::default()
-                    }
-                }
-            }
+            self.sync();
+            self.snapshot()
         }
         pub(super) fn write(&mut self, command: AudioCommand) -> Result<(), String> {
-            // Reacquire immediately before each mutation: a queued ID never targets a new endpoint.
-            let _ = self.refresh();
+            // Apply pending changes first: a queued ID never targets a stale endpoint or session.
+            self.sync();
             let state = self
                 .state
                 .as_ref()
@@ -391,7 +835,8 @@ mod native {
                 AudioCommand::SetMute { id, muted } => (id, None, Some(muted)),
                 _ => return Ok(()),
             };
-            if id == format!("{}|master", state.id) {
+            if id == state.master.id {
+                self.dirty.insert(Dirty::ENDPOINT);
                 unsafe {
                     if let Some(value) = volume {
                         state
@@ -405,6 +850,7 @@ mod native {
                 }
                 .map_err(error)
             } else {
+                self.dirty.insert(Dirty::VALUES);
                 apply_group(&state.groups, &id, |control| {
                     unsafe {
                         if let Some(value) = volume {
@@ -422,7 +868,7 @@ mod native {
         (value.clamp(0., 1.) * 100.).round() as u8
     }
     pub(super) fn diagnose() -> AudioSnapshot {
-        match Backend::new() {
+        match Backend::new(None) {
             Ok(mut backend) => backend.refresh(),
             Err(status) => AudioSnapshot {
                 status,
@@ -436,9 +882,10 @@ mod native {
     use super::*;
     pub(super) struct Backend;
     impl Backend {
-        pub(super) fn new() -> Result<Self, String> {
+        pub(super) fn new(_: Option<Sender<AudioCommand>>) -> Result<Self, String> {
             Err("Audio-Steuerung benötigt Windows.".into())
         }
+        pub(super) fn mark(&mut self, _: Dirty) {}
         pub(super) fn refresh(&mut self) -> AudioSnapshot {
             diagnose()
         }
@@ -659,5 +1106,115 @@ mod tests {
         assert!(snapshot.master.is_none());
         assert!(snapshot.status.contains("Kein Ausgabegerät"));
         assert!(snapshot.status.contains("Schreiben fehlgeschlagen"));
+    }
+
+    #[test]
+    fn events_map_to_minimal_dirty_flags() {
+        assert_eq!(dirty_for(AudioChange::Device), Dirty::REDISCOVER);
+        assert_eq!(dirty_for(AudioChange::Sessions), Dirty::SESSIONS);
+        assert_eq!(dirty_for(AudioChange::SessionValues), Dirty::VALUES);
+        assert_eq!(dirty_for(AudioChange::Endpoint), Dirty::ENDPOINT);
+        let mut d = Dirty::default();
+        assert!(d.is_empty());
+        d.insert(Dirty::VALUES);
+        d.insert(Dirty::ENDPOINT);
+        assert!(d.has(Dirty::VALUES) && d.has(Dirty::ENDPOINT));
+        assert!(!d.has(Dirty::SESSIONS) && !d.has(Dirty::REDISCOVER));
+        assert_eq!(d.take(), Dirty(12));
+        assert!(d.is_empty());
+        assert!(Dirty::ALL.has(Dirty::REDISCOVER));
+    }
+    #[test]
+    fn only_default_multimedia_render_change_is_relevant() {
+        assert!(default_change_relevant(true, true));
+        assert!(!default_change_relevant(false, true));
+        assert!(!default_change_relevant(true, false));
+    }
+    #[test]
+    fn debounce_waits_only_for_pure_event_bursts() {
+        let mut p = Pending::default();
+        assert_eq!(debounce_wait(&p, Duration::ZERO), None);
+        p.absorb(AudioCommand::Changed(AudioChange::Endpoint));
+        assert_eq!(debounce_wait(&p, Duration::ZERO), Some(DEBOUNCE));
+        // Never beyond the cap.
+        let near = MAX_DEBOUNCE - Duration::from_millis(10);
+        assert_eq!(debounce_wait(&p, near), Some(Duration::from_millis(10)));
+        assert_eq!(debounce_wait(&p, MAX_DEBOUNCE), None);
+        // User actions are not delayed.
+        p.absorb(AudioCommand::SetMute {
+            id: "a".into(),
+            muted: true,
+        });
+        assert_eq!(debounce_wait(&p, Duration::ZERO), None);
+        let mut r = Pending::default();
+        r.absorb(AudioCommand::Changed(AudioChange::Sessions));
+        r.absorb(AudioCommand::Refresh);
+        assert_eq!(debounce_wait(&r, Duration::ZERO), None);
+        let mut s = Pending::default();
+        s.absorb(AudioCommand::Changed(AudioChange::Sessions));
+        s.absorb(AudioCommand::Shutdown);
+        assert_eq!(debounce_wait(&s, Duration::ZERO), None);
+    }
+    #[test]
+    fn pending_coalesces_volume_latest_wins_and_merges_events() {
+        let mut p = Pending::default();
+        let vol = |id: &str, value| AudioCommand::SetVolume {
+            id: id.into(),
+            value,
+        };
+        p.absorb(vol("a", 10));
+        p.absorb(AudioCommand::SetMute {
+            id: "a".into(),
+            muted: true,
+        });
+        p.absorb(vol("b", 20));
+        p.absorb(vol("a", 200));
+        p.absorb(AudioCommand::Changed(AudioChange::Sessions));
+        p.absorb(AudioCommand::Changed(AudioChange::SessionValues));
+        p.absorb(AudioCommand::SetActive(false));
+        assert_eq!(
+            p.writes,
+            vec![
+                AudioCommand::SetMute {
+                    id: "a".into(),
+                    muted: true
+                },
+                vol("b", 20),
+                vol("a", 100),
+            ]
+        );
+        assert!(p.dirty.has(Dirty::SESSIONS) && p.dirty.has(Dirty::VALUES));
+        assert!(!p.dirty.has(Dirty::ENDPOINT));
+        assert_eq!(p.active, Some(false));
+        assert!(!p.shutdown);
+    }
+    #[test]
+    fn recompute_aggregates_after_in_place_change() {
+        let mut g = groups(
+            "e",
+            vec![member("a", 7, 20, true), member("b", 7, 30, true)],
+        );
+        assert!(g[0].row.muted);
+        g[0].members[1].volume = 90;
+        g[0].members[0].muted = false;
+        recompute(&mut g[0]);
+        assert_eq!(g[0].row.volume, 90);
+        assert!(!g[0].row.muted);
+    }
+    #[test]
+    fn snapshot_diff_suppresses_identical_snapshots() {
+        let a = AudioSnapshot {
+            master: Some(AudioRow {
+                id: "e|master".into(),
+                name: "M".into(),
+                volume: 5,
+                muted: false,
+            }),
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        assert_eq!(a, b);
+        b.master.as_mut().unwrap().volume = 6;
+        assert_ne!(a, b);
     }
 }

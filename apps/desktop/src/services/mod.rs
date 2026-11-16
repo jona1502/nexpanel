@@ -32,12 +32,32 @@ pub struct AudioSnapshot {
     pub sessions: Vec<AudioRow>,
     pub status: String,
 }
+/// Coarse change signal from Core Audio callbacks (sent from foreign COM threads).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioChange {
+    /// Default device, or the set/state of devices, changed.
+    Device,
+    /// Session created, state changed or disconnected.
+    Sessions,
+    /// Volume or mute of an existing session changed.
+    SessionValues,
+    /// Master volume or mute changed.
+    Endpoint,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioCommand {
     Refresh,
-    SetVolume { id: String, value: u8 },
-    SetMute { id: String, muted: bool },
+    SetVolume {
+        id: String,
+        value: u8,
+    },
+    SetMute {
+        id: String,
+        muted: bool,
+    },
     SetActive(bool),
+    /// Sent by Core Audio callbacks, not by the UI.
+    Changed(AudioChange),
     Shutdown,
 }
 

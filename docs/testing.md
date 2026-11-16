@@ -48,3 +48,17 @@ Performance-Zielwerte aus NexPanel.md sind nicht gemessen. Startmenü-/Autostart
 ## Bekannte Einschränkung: Esc und ComboBox
 
 Esc wird im winit-Handler (`main.rs`) vor Slint abgefangen und blendet das ganze Panel aus, auch wenn das Popup der Akzent-ComboBox offen ist. Die Std-ComboBox von Slint 1.18 macht den Popup-Zustand nicht nach außen sichtbar; ohne Eigenbau-ComboBox lässt sich Esc nicht sicher auf das Popup beschränken. Manueller Test: ComboBox öffnen, Esc drücken – das Panel verschwindet (bekannt, offen).
+
+## Audio: Ereignisse statt Polling (feat/audio-events)
+
+Der Audio-Worker pollt nicht mehr jede Sekunde. COM-Callbacks (`IMMNotificationClient`, `IAudioEndpointVolumeCallback`, `IAudioSessionNotification`, je Sitzung `IAudioSessionEvents`) senden nur eine kleine Nachricht (`AudioCommand::Changed`) an den Worker. Dieser bündelt Bursts (40 ms ruhig, höchstens 250 ms), liest nur das Geänderte neu und sendet einen Snapshot nur bei Änderung. Sicherheits-Refresh alle 30 s. Bei verborgenem Panel werden Änderungen gesammelt und beim Öffnen angewandt; Schreibbefehle werden immer sofort verarbeitet.
+
+Manuelle Tests (Panel offen und danach verborgen/neu geöffnet; Log: `NEXPANEL_LOG=debug`):
+
+- Master-Lautstärke und Stumm im Windows-Mixer bzw. mit Lautstärketasten ändern: Slider und Stumm-Schalter folgen sofort.
+- Lautstärke/Stumm einer App im Windows-Lautstärkemixer ändern: Zeile folgt.
+- Audio-App starten (Browser, Mediaplayer, Ton abspielen) und beenden: Zeile erscheint bzw. verschwindet; mehrere Sitzungen einer App bleiben eine Zeile.
+- Standardausgabegerät wechseln (z. B. Lautsprecher zu Kopfhörer) und Gerät ab-/anstecken: Master und Sitzungen wechseln auf das neue Gerät; kein Fehlerstatus dauerhaft.
+- Slider im Panel ziehen: kein Springen oder Abbrechen; eigene Änderungen führen nicht zu Flackern.
+- Leerlauf bei verborgenem Panel: kaum CPU-Wakeups des Audio-Threads (Prozess-Explorer, Thread `nexpanel-audio`).
+- Beenden der App: kein Hängen, kein Absturz (Unregistrierung der Callbacks).

@@ -2591,6 +2591,7 @@ dependencies = [
  "slint-build",
  "tempfile",
  "windows",
+ "windows-core",
  "winreg 0.55.0",
  "wmi",
 ]
