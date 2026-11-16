@@ -103,8 +103,3 @@ export component MainWindow inherits Window {
  Hint{text:"NEXPANEL  /  0.1";font-size:10px;}
  }
 }
-export component AppTray inherits SystemTrayIcon {
- icon:@image-url("../assets/tray.png");tooltip:"NexPanel – Systemsteuerung";
- callback open();callback quit();callback toggle(); clicked=>{root.toggle();}
- Menu {MenuItem{title:"Öffnen";activated=>{root.open();}} MenuItem{title:"Beenden";activated=>{root.quit();}}}
-}

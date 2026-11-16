@@ -7,7 +7,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 
 ## P0 – Bugs
 
-- [ ] **Tray-Icon nach Explorer-Neustart:** Slints `SystemTrayIcon` (1.18.1) nutzt ein
+- [x] **Tray-Icon nach Explorer-Neustart:** Slints `SystemTrayIcon` (1.18.1) nutzt ein
   `HWND_MESSAGE`-Fenster, das den Broadcast `TaskbarCreated` nicht empfängt. Das Icon
   bleibt danach verschwunden. Fix: eigener Win32-Tray-Host gemäß ADR-001.
 - [ ] **Slider-Drag:** Audio sendet jede Sekunde einen Snapshot, Display nach jedem Schreibvorgang.
@@ -19,11 +19,11 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 
 ## P1 – Fehlende Spec-Anforderungen
 
-- [ ] `WS_EX_TOOLWINDOW` am Popup-HWND setzen, damit es keinen Alt-Tab-Eintrag gibt (ADR-002).
-- [ ] Manifest mit `PerMonitorV2`, Common Controls v6 und supportedOS einbinden (ADR-003).
-- [ ] Popup per `Shell_NotifyIconGetRect` positionieren, mit Fallback auf Cursor bzw. `ABM_GETTASKBARPOS`.
+- [x] `WS_EX_TOOLWINDOW` am Popup-HWND setzen, damit es keinen Alt-Tab-Eintrag gibt (ADR-002).
+- [x] Manifest mit `PerMonitorV2`, Common Controls v6 und supportedOS einbinden (ADR-003).
+- [x] Popup per `Shell_NotifyIconGetRect` positionieren, mit Fallback auf Cursor bzw. `ABM_GETTASKBARPOS`.
   Beim Timer-Ablauf und bei Tastaturaktivierung nicht am Cursor öffnen.
-- [ ] `NIM_SETVERSION` v4 setzen und `NIN_SELECT`/`NIN_KEYSELECT` verarbeiten. Persistente GUID je Build-Variante,
+- [x] `NIM_SETVERSION` v4 setzen und `NIN_SELECT`/`NIN_KEYSELECT` verarbeiten. Persistente GUID je Build-Variante,
   da die GUID bei unsignierten Exes an den Pfad gebunden ist.
 - [ ] Toggle-Race über eine Zustandsmaschine statt der 250-ms-Heuristik lösen; Press-and-Hold abdecken.
 - [ ] Audio über Events statt Polling: `IMMNotificationClient`, `IAudioSessionNotification`
