@@ -20,7 +20,44 @@ pub struct PopupBounds {
     pub physical_size: (u32, u32),
     pub logical_size: (f64, f64),
 }
+/// Where the popup attaches: the tray icon's rectangle, or a bare point (cursor fallback).
+#[derive(Clone, Copy, Debug)]
+pub enum Anchor {
+    Icon(Area),
+    Point((i32, i32)),
+}
+impl Anchor {
+    pub fn center(self) -> (i32, i32) {
+        match self {
+            Anchor::Icon(i) => ((i.left + i.right) / 2, (i.top + i.bottom) / 2),
+            Anchor::Point(p) => p,
+        }
+    }
+}
+/// Places the popup next to the icon on the side facing the work area. The taskbar edge follows
+/// from where the icon lies relative to `work`; an icon inside the work area (overflow flyout,
+/// auto-hidden taskbar) gets the popup above it. The result is clamped into `inset`.
+pub fn icon_popup_position(work: Area, inset: Area, icon: Area, s: (i32, i32)) -> (i32, i32) {
+    const GAP: i32 = 8;
+    let (cx, cy) = Anchor::Icon(icon).center();
+    let (x, y) = if icon.right <= work.left {
+        (icon.right + GAP, cy - s.1 / 2)
+    } else if icon.left >= work.right {
+        (icon.left - s.0 - GAP, cy - s.1 / 2)
+    } else if icon.bottom <= work.top {
+        (cx - s.0 / 2, icon.bottom + GAP)
+    } else {
+        (cx - s.0 / 2, icon.top - s.1 - GAP)
+    };
+    (
+        x.clamp(inset.left, (inset.right - s.0).max(inset.left)),
+        y.clamp(inset.top, (inset.bottom - s.1).max(inset.top)),
+    )
+}
 pub fn popup_bounds(area: Area, cursor: (i32, i32), scale: f64) -> PopupBounds {
+    popup_bounds_at(area, Anchor::Point(cursor), scale)
+}
+pub fn popup_bounds_at(area: Area, anchor: Anchor, scale: f64) -> PopupBounds {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
@@ -40,8 +77,13 @@ pub fn popup_bounds(area: Area, cursor: (i32, i32), scale: f64) -> PopupBounds {
         ((400.0 * scale).round() as i32).clamp(1, width - margin_x * 2) as u32,
         ((620.0 * scale).round() as i32).clamp(1, height - margin_y * 2) as u32,
     );
+    let size_i = (size.0 as i32, size.1 as i32);
+    let position = match anchor {
+        Anchor::Point(p) => popup_position(inset, p, size_i),
+        Anchor::Icon(icon) => icon_popup_position(area, inset, icon, size_i),
+    };
     PopupBounds {
-        position: popup_position(inset, cursor, (size.0 as i32, size.1 as i32)),
+        position,
         physical_size: size,
         logical_size: (size.0 as f64 / scale, size.1 as f64 / scale),
     }
@@ -55,10 +97,21 @@ pub fn position(window: &slint::Window) {
         UI::WindowsAndMessaging::GetCursorPos,
     };
     unsafe {
-        let mut point = POINT::default();
-        if GetCursorPos(&mut point).is_err() {
-            return;
-        }
+        let anchor = match crate::tray::icon_rect() {
+            Some(icon) => Anchor::Icon(icon),
+            None => {
+                let mut cursor = POINT::default();
+                if GetCursorPos(&mut cursor).is_err() {
+                    return;
+                }
+                Anchor::Point((cursor.x, cursor.y))
+            }
+        };
+        let center = anchor.center();
+        let point = POINT {
+            x: center.0,
+            y: center.1,
+        };
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -80,14 +133,14 @@ pub fn position(window: &slint::Window) {
                 })
                 .map_or(native.scale_factor(), |m| m.scale_factor());
             let a = info.rcWork;
-            popup_bounds(
+            popup_bounds_at(
                 Area {
                     left: a.left,
                     top: a.top,
                     right: a.right,
                     bottom: a.bottom,
                 },
-                (point.x, point.y),
+                anchor,
                 scale,
             )
         }) else {
@@ -346,6 +399,50 @@ mod tests {
             ),
             (0, 48)
         );
+    }
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> Area {
+        Area {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+    #[test]
+    fn popup_sits_above_icon_for_bottom_taskbar() {
+        let work = rect(0, 0, 1920, 1032);
+        let icon = rect(1700, 1032, 1724, 1080);
+        let b = popup_bounds_at(work, Anchor::Icon(icon), 1.0);
+        assert_eq!(b.position, (1512, 1032 - 620 - 8));
+        assert!(b.position.0 + 400 <= 1920 - 8, "clamped into work area");
+    }
+    #[test]
+    fn popup_follows_taskbar_edge() {
+        let s = (400, 620);
+        let work = rect(0, 48, 1920, 1080);
+        let inset = rect(8, 56, 1912, 1072);
+        let top = icon_popup_position(work, inset, rect(1700, 0, 1724, 48), s);
+        assert_eq!(top, (1512, 56));
+        let work = rect(60, 0, 1920, 1080);
+        let left = icon_popup_position(work, rect(68, 0, 1912, 1072), rect(0, 900, 60, 924), s);
+        assert_eq!(left, (68, 452));
+        let work = rect(0, 0, 1860, 1080);
+        let right =
+            icon_popup_position(work, rect(8, 8, 1852, 1072), rect(1860, 900, 1920, 924), s);
+        assert_eq!(right, (1452, 452));
+    }
+    #[test]
+    fn icon_inside_work_area_gets_popup_above_it() {
+        let work = rect(0, 0, 1920, 1080);
+        let inset = rect(8, 8, 1912, 1072);
+        let p = icon_popup_position(work, inset, rect(1000, 900, 1024, 924), (400, 620));
+        assert_eq!(p, (812, 900 - 620 - 8));
+    }
+    #[test]
+    fn icon_anchor_keeps_negative_monitor_coordinates() {
+        let work = rect(-1920, 0, 0, 1032);
+        let b = popup_bounds_at(work, Anchor::Icon(rect(-40, 1032, -16, 1080)), 1.0);
+        assert_eq!(b.position, (-408, 404));
     }
     #[test]
     fn quotes_autostart_path() {
