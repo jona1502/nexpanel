@@ -12,6 +12,18 @@ pub enum Accent {
     Green,
     Orange,
 }
+/// Number of tabs in the panel; `last_tab` is always below this.
+pub const TAB_COUNT: u8 = 5;
+/// Any value that is not an integer in `0..TAB_COUNT` (negative, huge, text) becomes 0
+/// (Audio) instead of making the whole file unreadable.
+fn lenient_tab<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_u64()
+        .and_then(|n| u8::try_from(n).ok())
+        .filter(|n| *n < TAB_COUNT)
+        .unwrap_or(0))
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Unknown fields are ignored so a downgrade does not block on newer settings files.
 #[serde(default)]
@@ -21,6 +33,9 @@ pub struct Config {
     pub close_on_focus_loss: bool,
     pub linked_displays: bool,
     pub autostart: bool,
+    /// Tab that was open when the panel was last closed (0 = Audio).
+    #[serde(deserialize_with = "lenient_tab")]
+    pub last_tab: u8,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -30,6 +45,7 @@ impl Default for Config {
             close_on_focus_loss: true,
             linked_displays: false,
             autostart: false,
+            last_tab: 0,
         }
     }
 }
@@ -116,6 +132,40 @@ mod tests {
         };
         save(&path, &config).unwrap();
         assert_eq!(load(&path).unwrap(), config);
+    }
+    #[test]
+    fn last_tab_roundtrips_and_defaults_to_audio() {
+        assert_eq!(Config::default().last_tab, 0);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let config = Config {
+            last_tab: 3,
+            ..Config::default()
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).unwrap().last_tab, 3);
+    }
+    #[test]
+    fn old_files_without_last_tab_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"autostart":true,"accent":"green"}"#).unwrap();
+        let config = load(&path).unwrap();
+        assert!(config.autostart);
+        assert_eq!(config.last_tab, 0);
+    }
+    #[test]
+    fn invalid_last_tab_falls_back_to_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for raw in ["5", "255", "300", "-1", "2.5", "\"x\"", "null", "[1]"] {
+            std::fs::write(&path, format!(r#"{{"autostart":true,"last_tab":{raw}}}"#)).unwrap();
+            let config = load(&path).unwrap();
+            assert_eq!(config.last_tab, 0, "{raw}");
+            assert!(config.autostart);
+        }
+        std::fs::write(&path, br#"{"last_tab":4}"#).unwrap();
+        assert_eq!(load(&path).unwrap().last_tab, 4);
     }
     #[test]
     fn unknown_fields_are_ignored() {
