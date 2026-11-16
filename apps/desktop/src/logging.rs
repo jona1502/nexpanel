@@ -179,6 +179,27 @@ pub fn init() {
     }));
 }
 
+static WORKERS: std::sync::Mutex<Vec<(String, std::thread::JoinHandle<()>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Join all workers started by `spawn_worker`, waiting at most `timeout` in
+/// total. Workers still running afterwards are logged and left to the process exit.
+pub fn join_workers(timeout: std::time::Duration) {
+    let workers = std::mem::take(&mut *WORKERS.lock().unwrap_or_else(|e| e.into_inner()));
+    let deadline = std::time::Instant::now() + timeout;
+    for (name, handle) in workers {
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+            log::info!("Worker '{name}' gejoint");
+        } else {
+            log::warn!("Worker '{name}' beendet sich nicht rechtzeitig, wird abgebrochen");
+        }
+    }
+}
+
 /// Spawn a named worker. A panic is caught (the hook has already logged it) and
 /// sets `crashed`, so the UI can show an error. A spawn failure is logged and
 /// also sets `crashed`.
@@ -196,9 +217,15 @@ pub fn spawn_worker(name: &str, crashed: &CrashFlag, run: impl FnOnce() + Send +
                 log::info!("Worker '{thread_name}' beendet");
             }
         });
-    if let Err(error) = result {
-        crashed.store(true, Ordering::SeqCst);
-        log::error!("Worker '{name}' konnte nicht gestartet werden: {error}");
+    match result {
+        Ok(handle) => WORKERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((name.to_owned(), handle)),
+        Err(error) => {
+            crashed.store(true, Ordering::SeqCst);
+            log::error!("Worker '{name}' konnte nicht gestartet werden: {error}");
+        }
     }
 }
 
@@ -251,6 +278,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn join_workers_waits_for_finished_workers() {
+        let flag = CrashFlag::default();
+        spawn_worker("test-join", &flag, || {});
+        join_workers(std::time::Duration::from_secs(2));
+        assert!(!flag.load(Ordering::SeqCst));
+    }
     #[test]
     fn panicking_worker_sets_flag() {
         let flag = CrashFlag::default();

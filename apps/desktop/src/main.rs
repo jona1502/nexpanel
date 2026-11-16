@@ -573,6 +573,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(capture_timer);
     let _ = shutdown_display.send(DisplayCommand::Shutdown);
     let _ = shutdown_audio.send(AudioCommand::Shutdown);
+    // Display and audio workers: wait briefly so COM/DDC handles are released.
+    nexpanel::logging::join_workers(Duration::from_secs(1));
     let _ = stx.send(Command::Shutdown);
     let settings_result = settings_thread
         .join()
