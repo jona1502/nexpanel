@@ -74,8 +74,8 @@ pub fn popup_bounds_at(area: Area, anchor: Anchor, scale: f64) -> PopupBounds {
         bottom: area.bottom - margin_y,
     };
     let size = (
-        ((400.0 * scale).round() as i32).clamp(1, width - margin_x * 2) as u32,
-        ((620.0 * scale).round() as i32).clamp(1, height - margin_y * 2) as u32,
+        ((392.0 * scale).round() as i32).clamp(1, width - margin_x * 2) as u32,
+        ((440.0 * scale).round() as i32).clamp(1, height - margin_y * 2) as u32,
     );
     let size_i = (size.0 as i32, size.1 as i32);
     let position = match anchor {
@@ -448,7 +448,7 @@ mod tests {
         };
         let bounds = popup_bounds(area, (1900, 1030), 2.0);
         assert!(bounds.logical_size.1 <= 512.0);
-        assert_eq!(bounds.logical_size.0, 400.0);
+        assert_eq!(bounds.logical_size.0, 392.0);
         assert!(bounds.position.0 >= 8 && bounds.position.1 >= 8);
         assert!(bounds.position.0 + bounds.physical_size.0 as i32 <= area.right - 8);
         assert!(bounds.position.1 + bounds.physical_size.1 as i32 <= area.bottom - 8);
@@ -466,8 +466,8 @@ mod tests {
         assert_eq!(bounds.position.1, 72);
         assert!(bounds.position.1 + bounds.physical_size.1 as i32 <= 1072);
         let normal = popup_bounds(area, (-50, 1000), 1.0);
-        assert_eq!(normal.logical_size, (400.0, 620.0));
-        assert_eq!(normal.physical_size, (400, 620));
+        assert_eq!(normal.logical_size, (392.0, 440.0));
+        assert_eq!(normal.physical_size, (392, 440));
     }
     #[test]
     fn clamps_negative_monitor_and_left_taskbar() {
@@ -480,7 +480,7 @@ mod tests {
                     bottom: 1080
                 },
                 (-1900, 1080),
-                (400, 620)
+                (392, 440)
             ),
             (-1840, 452)
         );
@@ -496,7 +496,7 @@ mod tests {
                     bottom: 500
                 },
                 (20, 0),
-                (400, 620)
+                (392, 440)
             ),
             (0, 48)
         );
@@ -514,8 +514,8 @@ mod tests {
         let work = rect(0, 0, 1920, 1032);
         let icon = rect(1700, 1032, 1724, 1080);
         let b = popup_bounds_at(work, Anchor::Icon(icon), 1.0);
-        assert_eq!(b.position, (1512, 1032 - 620 - 8));
-        assert!(b.position.0 + 400 <= 1920 - 8, "clamped into work area");
+        assert_eq!(b.position, (1516, 1032 - 440 - 8));
+        assert!(b.position.0 + 392 <= 1920 - 8, "clamped into work area");
     }
     #[test]
     fn popup_follows_taskbar_edge() {
