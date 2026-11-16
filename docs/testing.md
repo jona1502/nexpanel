@@ -83,3 +83,32 @@ Manuelle Tests (Panel offen und danach verborgen/neu geöffnet; Log: `NEXPANEL_L
 - Slider im Panel ziehen: kein Springen oder Abbrechen; eigene Änderungen führen nicht zu Flackern.
 - Leerlauf bei verborgenem Panel: kaum CPU-Wakeups des Audio-Threads (Prozess-Explorer, Thread `nexpanel-audio`).
 - Beenden der App: kein Hängen, kein Absturz (Unregistrierung der Callbacks).
+
+## Manuell: Idle-Wakeups und Hotplug (perf/idle-and-hotplug)
+
+Intervalle: UI-Tick 200 ms bei sichtbarem Panel, 1 s bei verborgenem Panel (Countdown-Ablauf per One-Shot-Timer zur exakten Deadline). Display-Sicherheitspoll 30 s (sichtbar) bzw. 60 s (verborgen); Helligkeit wird nur bei sichtbarem Panel gelesen (max. alle 30 s) und einmal beim Öffnen. Hotplug kommt per `WM_DISPLAYCHANGE`/`DBT_DEVNODES_CHANGED`, entprellt mit 300 ms.
+
+| Test | Erwartung |
+|---|---|
+| Panel verbergen, 60 s warten, Wakeups messen (siehe unten) | Deutlich weniger Kontextwechsel/s als vorher (ca. 1 Tick/s statt 5; Display-Worker nur bei Poll/Ereignis) |
+| Countdown 10 s starten, Panel verbergen | Ablauf exakt nach 10 s (Panel öffnet sich, Alarm), kein Verzug von bis zu 1 s |
+| Stoppuhr starten, Panel verbergen, nach 10 s öffnen | Anzeige springt sofort auf die richtige Zeit |
+| Panel verbergen, Display-Änderung am Systemmonitor (Auflösung wechseln) und Panel öffnen | Zeilen sind sofort aktuell |
+| Panel offen: Monitor ein-/ausstecken oder Auflösung ändern | Liste aktualisiert sich nach unter 1 s, nicht erst nach Sekunden |
+| Panel verborgen: Monitor ein-/ausstecken, dann Panel öffnen | Liste stimmt sofort; Log zeigt Display-Erkennung beim Hotplug |
+| Helligkeit am Monitor-OSD ändern, Panel verborgen lassen, dann öffnen | Slider zeigt beim Öffnen den neuen Wert |
+| Zweite Instanz starten, während das Panel verborgen ist | Panel öffnet sich innerhalb ca. 1 s |
+
+### Idle-CPU und Wakeups messen
+
+- Process Explorer: `nexpanel.exe` > Properties > Threads; Spalte „Context Switch Delta" bzw. Performance-Graph. Panel verborgen, 60 s beobachten.
+- PowerShell (Kontextwechsel/s des Prozesses):
+
+```powershell
+$p = Get-Process nexpanel
+Get-Counter "\Process($($p.ProcessName))\Context Switches/sec" -SampleInterval 5 -MaxSamples 12
+Get-Counter "\Process($($p.ProcessName))\% Processor Time" -SampleInterval 5 -MaxSamples 12
+```
+
+- Vergleich: Stand `feat/logging` (200-ms-Tick ohne Unterbrechung, Display-Worker mit 100-ms-Wakeup) gegen diesen Branch, jeweils Panel verborgen und ohne Timer.
+
