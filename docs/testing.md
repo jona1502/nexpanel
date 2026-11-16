@@ -227,3 +227,19 @@ Reihenfolge: Audio 0, Display 1, System 2, Zeit 3, Einstellungen 4. Das Panel ze
 | Timer ablaufen lassen bei verborgenem Panel, Panel öffnen | Zeit mit Banner; nach Schließen und Öffnen bleibt Zeit |
 | Tray-Menü „Einstellungen“ | Einstellungen öffnet, auch wenn zuletzt ein anderer Tab offen war; danach gemerkt |
 | System-Tab, Panel verbergen | Messung stoppt wie zuvor (Gating auf Tab-Index System = 2) |
+
+## Hover-Tooltips (feat/hover-tooltips)
+
+Overlay `HoverTip` (`ui/tooltip.slint`) am Ende von `MainWindow`; Zeilen nutzen `TipRow`. Anzeige nach 450 ms ruhigem Hover, nicht interaktiv. Manuell prüfen (Eingaben sind in der Capture-Vorschau nicht testbar):
+
+| Schritt | Erwartung |
+|---|---|
+| Audio-Tab, Maus ca. 0,5 s auf eine App-Zeile (Icon, Slider oder Zahl) | Tooltip mit App-Name unter der Zeile |
+| Zur nächsten Zeile wechseln | Tooltip verschwindet, erscheint nach ca. 0,5 s mit neuem Namen |
+| Slider ziehen / Mute-Icon klicken | Tooltip verschwindet; Ziehen und Mute funktionieren unverändert |
+| Master-Zeile hovern | Name des Standardausgabegeräts |
+| Zeile „Systemtöne“ hovern | Label „Systemtöne“ |
+| Display-Tab, Zeile hovern | Monitorname (auch bei nur einem Monitor) |
+| Unterste Zeile hovern / lange Namen | Tooltip klappt nach oben, bleibt im Fenster, wird bei ca. 300 px gekürzt |
+| Maus aus dem Panel, Tab wechseln, Esc, „×“, Panel schließen und öffnen | Tooltip weg |
+| Dropdown im Einstellungs-Tab öffnen | Kein Tooltip, Dropdown bleibt oben |
