@@ -23,6 +23,8 @@ pub enum TrayEvent {
     NotificationClicked,
     /// System resumed from standby/hibernate: timers must be re-checked immediately.
     Resumed,
+    /// Monitor hotplug, resolution or layout change (`WM_DISPLAYCHANGE` / `DBT_DEVNODES_CHANGED`).
+    DisplayChange,
 }
 
 const NIN_BALLOONUSERCLICK: u32 = 0x405;
@@ -42,6 +44,15 @@ fn wide<const N: usize>(s: &str) -> [u16; N] {
         *slot = unit;
     }
     out
+}
+
+const WM_DISPLAYCHANGE: u32 = 0x007E;
+const WM_DEVICECHANGE: u32 = 0x0219;
+const DBT_DEVNODES_CHANGED: usize = 0x0007;
+
+/// Messages that may mean the monitor topology changed.
+fn is_display_change(msg: u32, wparam: usize) -> bool {
+    msg == WM_DISPLAYCHANGE || (msg == WM_DEVICECHANGE && wparam == DBT_DEVNODES_CHANGED)
 }
 
 /// Shell notification codes (`NIN_SELECT`, `NIN_KEYSELECT`) and legacy mouse messages.
@@ -576,6 +587,10 @@ mod win {
                 shared.retry_tick();
                 return LRESULT(0);
             }
+            if is_display_change(msg, wparam.0) {
+                // Only a signal; the display worker debounces. Default handling still runs.
+                (shared.handler)(TrayEvent::DisplayChange);
+            }
         }
         // SAFETY: forwards the unchanged arguments of this window procedure.
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -676,6 +691,14 @@ pub fn icon_rect() -> Option<crate::platform::Area> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_topology_messages_signal_display_change() {
+        assert!(is_display_change(WM_DISPLAYCHANGE, 0));
+        assert!(is_display_change(WM_DEVICECHANGE, DBT_DEVNODES_CHANGED));
+        assert!(!is_display_change(WM_DEVICECHANGE, 0x8000));
+        assert!(!is_display_change(WM_APP_TEST, DBT_DEVNODES_CHANGED));
+    }
+    const WM_APP_TEST: u32 = 0x8001;
     #[test]
     fn v4_uses_loword_of_lparam() {
         // High word carries the icon id in v4.
