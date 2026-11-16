@@ -631,6 +631,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(s) = arx.try_iter().last() {
                 snapshot_ready.set((snapshot_ready.get().0, true));
                 a.set_audio_status(s.status.into());
+                a.set_audio_device(if s.device.is_empty() {
+                    "Lautstärke".into()
+                } else {
+                    s.device.into()
+                });
                 let to_item = |r: services::AudioRow, master: bool| AudioItem {
                     initial: r
                         .name

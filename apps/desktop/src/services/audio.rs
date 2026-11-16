@@ -346,6 +346,7 @@ mod native {
     use std::collections::{HashMap, HashSet};
     use windows::{
         Win32::{
+            Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
             Foundation::{CloseHandle, HANDLE, PROPERTYKEY, S_OK},
             Media::Audio::{
                 Endpoints::{
@@ -354,7 +355,13 @@ mod native {
                 },
                 *,
             },
-            System::{Com::*, Threading::*},
+            System::{
+                Com::{
+                    StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
+                    *,
+                },
+                Threading::*,
+            },
         },
         core::{Interface, PCWSTR, PWSTR, Ref, implement},
     };
@@ -387,6 +394,22 @@ mod native {
     }
     fn error(error: windows::core::Error) -> String {
         format!("Audio ist momentan nicht verfügbar: {error}")
+    }
+    /// Friendly endpoint name ("Lautsprecher (Realtek Audio)"); best effort.
+    fn device_name(device: &IMMDevice) -> String {
+        unsafe {
+            let Ok(store) = device.OpenPropertyStore(STGM_READ) else {
+                return String::new();
+            };
+            let Ok(mut value) = store.GetValue(&PKEY_Device_FriendlyName) else {
+                return String::new();
+            };
+            let text = PropVariantToStringAlloc(&value)
+                .map(|p| Allocation(p).string())
+                .unwrap_or_default();
+            let _ = PropVariantClear(&mut value);
+            text
+        }
     }
     fn process_name(pid: u32) -> Option<String> {
         let process =
@@ -542,6 +565,7 @@ mod native {
         manager: IAudioSessionManager2,
         groups: Vec<Group<ISimpleAudioVolume>>,
         master: AudioRow,
+        device_name: String,
         skipped: usize,
         tx: Option<Sender<AudioCommand>>,
         endpoint_cb: Option<IAudioEndpointVolumeCallback>,
@@ -574,6 +598,7 @@ mod native {
                 // Quirk: session notifications may not fire unless the enumerator was requested once.
                 let _ = manager.GetSessionEnumerator();
                 let mut state = State {
+                    device_name: device_name(&device),
                     master: AudioRow {
                         id: format!("{id}|master"),
                         name: "Standardausgabegerät".into(),
@@ -804,6 +829,7 @@ mod native {
                 Some(state) => AudioSnapshot {
                     master: Some(state.master.clone()),
                     sessions: state.groups.iter().map(|g| g.row.clone()).collect(),
+                    device: state.device_name.clone(),
                     status: if state.skipped == 0 {
                         String::new()
                     } else {
