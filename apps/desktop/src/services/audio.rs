@@ -52,21 +52,9 @@ fn groups<T>(endpoint: &str, members: Vec<Member<T>>) -> Vec<Group<T>> {
         group.members.push(member);
     }
     grouped
+        // The id is only `endpoint|pid`: sessions of one process may come and go
+        // (even during a drag) without changing it. Instances are member data only.
         .into_values()
-        .map(|mut group| {
-            // Full, length-prefixed identifiers avoid hash collisions and remain
-            // stable under enumeration reordering, but change with membership.
-            let mut instances: Vec<_> = group.members.iter().map(|m| m.instance.as_str()).collect();
-            instances.sort_unstable();
-            group.row.id.push('|');
-            for instance in instances {
-                group
-                    .row
-                    .id
-                    .push_str(&format!("{}:{instance}", instance.len()));
-            }
-            group
-        })
         .collect()
 }
 fn target_indices<T>(groups: &[Group<T>], id: &str) -> Result<Vec<usize>, &'static str> {
@@ -145,6 +133,16 @@ fn dirty_for(change: AudioChange) -> Dirty {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn default_change_relevant(render: bool, multimedia: bool) -> bool {
     render && multimedia
+}
+
+/// Extra refresh when the panel becomes visible. Missed changes are already in `deferred`;
+/// a full rediscovery on every open would only add latency and stale data.
+fn activation_dirty(was_active: bool, now_active: bool) -> Dirty {
+    if now_active && !was_active {
+        Dirty(Dirty::VALUES.0 | Dirty::ENDPOINT.0)
+    } else {
+        Dirty::default()
+    }
 }
 
 const DEBOUNCE: Duration = Duration::from_millis(40);
@@ -285,9 +283,7 @@ fn worker(
             return;
         }
         if let Some(value) = pending.active {
-            if value && !active {
-                pending.dirty.insert(Dirty::ALL);
-            }
+            pending.dirty.insert(activation_dirty(active, value));
             active = value;
         }
         let mut dirty = pending.dirty;
@@ -942,6 +938,30 @@ mod tests {
         assert!(target_indices::<()>(&[], "endpoint|pid:7").is_err());
     }
     #[test]
+    fn new_session_same_pid_keeps_id() {
+        let before = groups("e", vec![member("a", 7, 20, false)]);
+        let after = groups(
+            "e",
+            vec![member("a", 7, 20, false), member("b", 7, 50, false)],
+        );
+        assert_eq!(before[0].row.id, after[0].row.id);
+        assert_eq!(target_indices(&after, &before[0].row.id), Ok(vec![0, 1]));
+        let gone = groups("e", vec![member("b", 7, 50, false)]);
+        assert_eq!(before[0].row.id, gone[0].row.id);
+    }
+    #[test]
+    fn activation_applies_only_cheap_refresh_never_rediscover() {
+        let d = activation_dirty(false, true);
+        assert!(d.has(Dirty::VALUES) && d.has(Dirty::ENDPOINT));
+        assert!(!d.has(Dirty::REDISCOVER) && !d.has(Dirty::SESSIONS));
+        assert!(activation_dirty(true, true).is_empty());
+        assert!(activation_dirty(true, false).is_empty());
+        // Deferred changes (e.g. a device event while hidden) still rediscover.
+        let mut all = d;
+        all.insert(dirty_for(AudioChange::Device));
+        assert!(all.has(Dirty::REDISCOVER));
+    }
+    #[test]
     fn volume_percent_is_clamped() {
         assert_eq!(normalized(255), 100);
         assert_eq!(normalized(42), 42);
@@ -1012,10 +1032,12 @@ mod tests {
     }
 
     #[test]
-    fn replaced_member_same_pid_rejects_previous_group_id() {
+    fn group_id_is_stable_across_instances_and_order() {
         let old = groups("e", vec![member("old-instance", 7, 20, false)]);
         let current = groups("e", vec![member("replacement", 7, 20, false)]);
-        assert!(target_indices(&current, &old[0].row.id).is_err());
+        assert_eq!(old[0].row.id, "e|pid:7");
+        assert_eq!(target_indices(&current, &old[0].row.id), Ok(vec![0]));
+        assert!(target_indices(&current, "e|pid:8").is_err());
         let reversed = groups(
             "e",
             vec![member("b", 7, 20, false), member("a", 7, 20, false)],
