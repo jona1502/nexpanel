@@ -81,6 +81,8 @@ Manuelle Tests (Panel offen und danach verborgen/neu geöffnet; Log: `NEXPANEL_L
 - Audio-App starten (Browser, Mediaplayer, Ton abspielen) und beenden: Zeile erscheint bzw. verschwindet; mehrere Sitzungen einer App bleiben eine Zeile.
 - Standardausgabegerät wechseln (z. B. Lautsprecher zu Kopfhörer) und Gerät ab-/anstecken: Master und Sitzungen wechseln auf das neue Gerät; kein Fehlerstatus dauerhaft.
 - Slider im Panel ziehen: kein Springen oder Abbrechen; eigene Änderungen führen nicht zu Flackern.
+- App starten, Panel mehrfach hintereinander öffnen und schließen: Liste ohne veraltete Einträge und ohne Flackern (beim Öffnen keine vollständige Neuerkennung, nur Werte und Master werden aufgefrischt).
+- Slider einer App ziehen, während dieselbe App einen weiteren Stream öffnet: Zeile bleibt, Ziehen bricht nicht ab, kein Fehler "Audio-Sitzung ist nicht mehr verfügbar" (Gruppen-ID ist `Endpunkt|pid`).
 - Leerlauf bei verborgenem Panel: kaum CPU-Wakeups des Audio-Threads (Prozess-Explorer, Thread `nexpanel-audio`).
 - Beenden der App: kein Hängen, kein Absturz (Unregistrierung der Callbacks).
 
@@ -97,6 +99,8 @@ Intervalle: UI-Tick 200 ms bei sichtbarem Panel, 1 s bei verborgenem Panel (Coun
 | Panel offen: Monitor ein-/ausstecken oder Auflösung ändern | Liste aktualisiert sich nach unter 1 s, nicht erst nach Sekunden |
 | Panel verborgen: Monitor ein-/ausstecken, dann Panel öffnen | Liste stimmt sofort; Log zeigt Display-Erkennung beim Hotplug |
 | Helligkeit am Monitor-OSD ändern, Panel verborgen lassen, dann öffnen | Slider zeigt beim Öffnen den neuen Wert |
+| Monitor aus dem Standby aufwecken | DDC-Zeile erholt sich innerhalb ca. 5 s (zweite Erkennung 3 s nach der ersten, wenn ein Monitor keine Regelung hat) |
+| Monitor abziehen, während ein Helligkeits-Slider gezogen wird | Fehlerstatus, kein Dauerfeuer von Erkennungen im Log; neue Erkennung frühestens nach 5 s bzw. beim Hotplug-Ereignis |
 | Zweite Instanz starten, während das Panel verborgen ist | Panel öffnet sich innerhalb ca. 1 s |
 
 ### Idle-CPU und Wakeups messen

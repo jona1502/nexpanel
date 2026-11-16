@@ -55,6 +55,26 @@ fn poll_interval(active: bool) -> Duration {
 const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Retry delay after a failed write, so a stale status does not wait for the safety poll.
 const RETRY_DELAY: Duration = Duration::from_secs(2);
+/// A monitor that is still waking up often fails the first DDC probe; probe once more later.
+const WAKE_REPROBE: Duration = Duration::from_secs(3);
+/// Minimum wait before a failed command (monitor removed/unsupported) may trigger a rediscovery.
+const QUEUE_BACKOFF: Duration = Duration::from_secs(5);
+/// Whether any monitor currently has no brightness control.
+fn lacks_control(devices: &[DisplayDevice]) -> bool {
+    devices.iter().any(|d| d.brightness.is_none())
+}
+/// Retry deadline: an already pending (earlier) deadline is kept, so a stream of failing
+/// commands neither pushes it out nor causes immediate rediscoveries.
+fn schedule_retry(current: Option<Instant>, now: Instant, delay: Duration) -> Option<Instant> {
+    let new = now + delay;
+    Some(current.map_or(new, |c| c.min(new)))
+}
+fn left(deadline: Option<Instant>, now: Instant) -> Option<Duration> {
+    deadline.map(|d| d.saturating_duration_since(now))
+}
+fn due(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|d| now >= d)
+}
 /// How long the worker may sleep: until the safety poll or a debounce deadline, whichever is first.
 fn wait_timeout(since_poll: Duration, active: bool, debounce_left: Option<Duration>) -> Duration {
     let poll_left = poll_interval(active).saturating_sub(since_poll);
@@ -114,13 +134,18 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
     }
     let mut active = true;
     let mut last = Instant::now();
-    let mut retry = false;
+    let mut retry_at: Option<Instant> = None;
+    let mut reprobe_at: Option<Instant> = None;
     let mut debounce: Option<Instant> = None;
     loop {
+        let now = Instant::now();
         let wait = wait_timeout(
             last.elapsed(),
             active,
-            debounce.map(|d| d.saturating_duration_since(Instant::now())),
+            [debounce, retry_at, reprobe_at]
+                .into_iter()
+                .filter_map(|d| left(d, now))
+                .min(),
         );
         let first = rx.recv_timeout(wait);
         let mut commands = Vec::new();
@@ -147,26 +172,44 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
                     activated |= v && !active;
                     active = v;
                 }
-                DisplayCommand::TopologyChanged => debounce = Some(Instant::now() + DEBOUNCE),
+                DisplayCommand::TopologyChanged => {
+                    debounce = Some(Instant::now() + DEBOUNCE);
+                    // A newer event replaces a scheduled re-probe.
+                    reprobe_at = None;
+                }
                 DisplayCommand::Refresh => refresh = true,
                 c => {
                     if let Err(e) = queue(&mut pending, &b.snapshot.devices, c) {
+                        // No immediate discovery per failed command: fail fast, retry later.
                         error = Some(e);
-                        refresh = true;
+                        retry_at = schedule_retry(retry_at, Instant::now(), QUEUE_BACKOFF);
                     }
                 }
             }
         }
-        let due = last.elapsed() >= poll_interval(active);
-        let settled = debounce.is_some_and(|d| Instant::now() >= d);
+        let now = Instant::now();
+        let polled = last.elapsed() >= poll_interval(active);
+        let settled = due(debounce, now);
         if settled {
             debounce = None;
         }
-        let due = due || settled || activated;
-        if refresh || due {
-            b.refresh(refresh || retry, read_mode(active, activated));
-            retry = false;
+        let retry_due = due(retry_at, now);
+        if retry_due {
+            retry_at = None;
+        }
+        let reprobe_due = due(reprobe_at, now);
+        if reprobe_due {
+            reprobe_at = None;
+        }
+        let force = refresh || retry_due || reprobe_due;
+        let needs_refresh = polled || settled || activated || force;
+        if needs_refresh {
+            b.refresh(force, read_mode(active, activated));
             last = Instant::now();
+            // At most one re-probe per topology event (never re-armed by the re-probe itself).
+            if settled && lacks_control(&b.snapshot.devices) {
+                reprobe_at = Some(Instant::now() + WAKE_REPROBE);
+            }
         }
         let changed = !pending.is_empty();
         for (id, value) in pending {
@@ -176,12 +219,11 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
             }
         }
         if let Some(e) = error {
-            retry = true;
-            debounce = Some(Instant::now() + RETRY_DELAY);
+            retry_at = schedule_retry(retry_at, Instant::now(), RETRY_DELAY);
             b.snapshot.status = e;
         }
         // Send only real changes; identical snapshots would just churn the UI.
-        if (changed || refresh || due) && b.snapshot != sent {
+        if (changed || needs_refresh) && b.snapshot != sent {
             if out.send(b.snapshot.clone()).is_err() {
                 return;
             }
@@ -766,6 +808,40 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_commands_back_off_without_pushing_deadline() {
+        let t0 = Instant::now();
+        assert!(QUEUE_BACKOFF >= Duration::from_secs(5));
+        let first = schedule_retry(None, t0, QUEUE_BACKOFF).unwrap();
+        assert_eq!(first, t0 + QUEUE_BACKOFF);
+        // Further failures during a drag keep the earlier deadline.
+        let later = t0 + Duration::from_secs(1);
+        assert_eq!(
+            schedule_retry(Some(first), later, QUEUE_BACKOFF),
+            Some(first)
+        );
+        // A shorter write retry may pull it forward, never back.
+        assert_eq!(
+            schedule_retry(Some(first), t0, RETRY_DELAY),
+            Some(t0 + RETRY_DELAY)
+        );
+        assert!(!due(Some(first), t0 + Duration::from_secs(4)));
+        assert!(due(Some(first), first));
+        assert!(!due(None, first));
+    }
+    #[test]
+    fn reprobe_only_when_a_monitor_lacks_control() {
+        let mut d = devices();
+        assert_eq!(lacks_control(&d), d.iter().any(|x| x.brightness.is_none()));
+        for x in &mut d {
+            x.brightness = Some(50);
+        }
+        assert!(!lacks_control(&d));
+        d[0].brightness = None;
+        assert!(lacks_control(&d));
+        assert!(!lacks_control(&[]));
+        assert!(WAKE_REPROBE > DEBOUNCE);
+    }
     fn devices() -> Vec<DisplayDevice> {
         vec![
             DisplayDevice {
