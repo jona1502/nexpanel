@@ -25,12 +25,12 @@ Erledigte Punkte abhaken und auf den PR verweisen.
   Beim Timer-Ablauf und bei Tastaturaktivierung nicht am Cursor öffnen.
 - [x] `NIM_SETVERSION` v4 setzen und `NIN_SELECT`/`NIN_KEYSELECT` verarbeiten. Persistente GUID je Build-Variante,
   da die GUID bei unsignierten Exes an den Pfad gebunden ist.
-- [ ] Toggle-Race über eine Zustandsmaschine statt der 250-ms-Heuristik lösen; Press-and-Hold abdecken.
+- [x] Toggle-Race über eine Zustandsmaschine statt der 250-ms-Heuristik lösen; Press-and-Hold abdecken.
 - [x] Audio über Events statt Polling (feat/audio-events): `IMMNotificationClient`, `IAudioSessionNotification`
   (vorher `GetSessionEnumerator` aufrufen), `IAudioEndpointVolumeCallback`. Kein Voll-Refresh pro Write.
 - [x] Timer: robust gegen Sprünge der Systemuhr machen und `WM_POWERBROADCAST` als Resume-Trigger nutzen.
   Echte Benachrichtigung statt erzwungenem Popup, das den Fokus stiehlt (ADR-008).
-- [ ] Kontextmenü um Einstellungen und Autostart erweitern.
+- [x] Kontextmenü um Einstellungen und Autostart erweitern.
 - [x] Logging in eine Datei unter `%LOCALAPPDATA%\NexPanel\logs` (feat/logging).
 - [x] Slint-Lizenzpfad festlegen, „Über“-Bereich mit `AboutSlint` (ADR-009). Offen: Lizenz von NexPanel selbst, Drittlizenz-Übersicht.
 

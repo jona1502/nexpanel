@@ -14,6 +14,27 @@ Der Gesamtreview über den v0.1-Branch steht aus; bisher liegen nur Reviews je T
 - Release-ZIP erstellt; Inhalt: exe, install.ps1, uninstall.ps1, README.md; externe SHA256-Datei. Installiertes Binary stimmt mit Release-Binary überein, `--help` beendet erfolgreich. Isolierter Test ohne Shortcut: Installation, Upgrade, Deinstallation; settings.json und fremde Sentineldatei bleiben erhalten. Unverwaltete nichtleere Ziele und Deinstallation ohne passende Installationsmarkierung werden abgelehnt. PowerShell-Syntaxprüfung erfolgreich.
 - Logging: Logdatei unter `%LOCALAPPDATA%\NexPanel\logs\nexpanel.log` (Rotation >1 MB nach `nexpanel.old.log`). Level per Umgebungsvariable `NEXPANEL_LOG` (`error|warn|info|debug|trace`), Standard Info (Release) bzw. Debug.
 
+## Manuelle Tests: Popup-Zustand und Tray-Menü
+
+Zustandsmaschine: `apps/desktop/src/popup_state.rs` (tabellengetriebene Unit-Tests, inkl. Press-and-Hold). Die nativen Abläufe sind nur manuell prüfbar.
+
+| Nr. | Aktion | Erwartung |
+|---|---|---|
+| P1 | Tray-Icon schnell doppelt klicken (Popup zu) | Popup öffnet und schließt wieder (zwei Aktionen), kein Flackern, kein Hänger |
+| P2 | Popup offen, einmal auf das Tray-Icon klicken | Popup schließt und öffnet nicht erneut |
+| P3 | Popup offen, Maustaste auf dem Tray-Icon 1–3 s gedrückt halten, dann loslassen | Popup schließt beim Drücken und bleibt nach dem Loslassen zu |
+| P4 | Wie P3, aber beim Halten vom Icon wegziehen und außerhalb loslassen; danach einmal klicken | Dieser Klick öffnet das Popup normal (nur beim ersten Klick nach einem Abbruch darf das Popup ausnahmsweise zubleiben, höchstens 5 s lang) |
+| P5 | Popup offen, auf den Desktop klicken, danach Tray-Icon klicken | Popup öffnet |
+| P6 | Popup offen, Esc | Popup schließt sofort; nächster Tray-Klick öffnet |
+| P7 | Popup offen, Button „×“ | Schließt; nächster Tray-Klick öffnet |
+| M1 | Rechtsklick auf das Tray-Icon | Menü: Öffnen, Trennlinie, Einstellungen, Mit Windows starten, Trennlinie, Beenden; Klick daneben schließt das Menü |
+| M2 | Menü „Öffnen“ | Popup öffnet am Tray-Icon |
+| M3 | Menü „Einstellungen“ | Popup öffnet auf dem Tab „Einstellungen“ |
+| M4 | Menü „Mit Windows starten“ anklicken | Häkchen wechselt beim nächsten Öffnen des Menüs; Checkbox im Tab „Einstellungen“ zeigt denselben Zustand; Run-Eintrag in der Registry entspricht ihm |
+| M5 | Checkbox im Einstellungs-Tab umschalten, dann Menü öffnen | Häkchen im Menü entspricht der Checkbox |
+| M6 | Menü „Beenden“ | App beendet sich, Icon verschwindet |
+| M7 | Maustasten vertauscht (Windows-Einstellung) und P2/P3 wiederholen | Wie P2/P3 |
+
 ## Reproduzieren
 
 Cargo-/Astro-Befehle stehen in [Setup](setup.md). Distribution:
