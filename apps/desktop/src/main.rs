@@ -5,6 +5,7 @@ use nexpanel::{
     services::{self, AudioCommand, DisplayCommand},
     settings_worker::{self, Command},
     time_tools::{Countdown, Stopwatch},
+    tray::{self, TrayEvent},
 };
 use slint::{
     ComponentHandle, ModelRc, VecModel,
@@ -60,6 +61,7 @@ fn clock(ms: u64) -> slint::SharedString {
 }
 fn show(app: &MainWindow) {
     let _ = app.show();
+    platform::hide_from_alt_tab(app.window());
     platform::position(app.window());
     app.window().with_winit_window(|w| w.focus_window());
 }
@@ -163,7 +165,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let app = MainWindow::new()?;
-    let tray = AppTray::new()?;
     let (dtx, drx) = services::display::spawn();
     let (atx, arx) = services::audio::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
@@ -220,32 +221,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-    tray.on_toggle({
-        let weak = app.as_weak();
-        move || {
-            if let Some(app) = weak.upgrade() {
-                if app.window().is_visible() {
-                    let _ = app.hide();
-                } else if last_blur
-                    .get()
-                    .is_none_or(|t| t.elapsed() > Duration::from_millis(250))
-                {
-                    show(&app);
+    let tray = if capture_mode {
+        None
+    } else {
+        Some(tray::TrayHost::new(Box::new({
+            let weak = app.as_weak();
+            move |event| {
+                let Some(app) = weak.upgrade() else {
+                    return;
+                };
+                match event {
+                    TrayEvent::Toggle if app.window().is_visible() => {
+                        let _ = app.hide();
+                    }
+                    TrayEvent::Toggle => {
+                        if last_blur
+                            .get()
+                            .is_none_or(|t| t.elapsed() > Duration::from_millis(250))
+                        {
+                            show(&app);
+                        }
+                    }
+                    TrayEvent::Open => show(&app),
+                    TrayEvent::Quit => {
+                        let _ = slint::quit_event_loop();
+                    }
                 }
             }
-        }
-    });
-    tray.on_open({
-        let weak = app.as_weak();
-        move || {
-            if let Some(app) = weak.upgrade() {
-                show(&app);
-            }
-        }
-    });
-    tray.on_quit(|| {
-        let _ = slint::quit_event_loop();
-    });
+        }))?)
+    };
     app.on_refresh_display({
         let tx = dtx.clone();
         move || {
@@ -509,7 +513,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         );
     }
-    slint::run_event_loop()?;
+    // The own tray host no longer keeps the loop alive; hiding the popup must not quit.
+    slint::run_event_loop_until_quit()?;
+    drop(tray);
     tick.stop();
     capture_timer.stop();
     drop(capture_timer);
