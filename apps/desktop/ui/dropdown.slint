@@ -1,0 +1,132 @@
+// Own dropdown (replaces std ComboBox) so the app knows whether the list is open.
+// Slint 1.18 PopupWindow cannot report a click-outside dismissal without crashing the
+// compiler's const propagation (`is-open`), so the list is drawn by the window itself
+// (`DropdownList`, placed last in the window so it overlays everything).
+
+// The closed field. Parent owns `open` and shows a `DropdownList` when it is true.
+export component Dropdown inherits Rectangle {
+    in property <[string]> model;
+    in property <int> current-index: 0;
+    in property <bool> enabled: true;
+    in property <bool> open: false;
+    // Absolute window position and width of the field, so the parent can place the list.
+    callback toggled(length, length, length);
+
+    height: 36px;
+    min-width: 120px;
+    background: #252832;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: !root.enabled ? #2b2e39 : root.open || head.has-hover ? #809cff : #343640;
+    opacity: root.enabled ? 1 : 0.5;
+
+    Text {
+        x: 12px;
+        width: parent.width - 36px;
+        text: root.model[root.current-index];
+        color: #f3f4f8;
+        font-family: "Segoe UI";
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Path {
+        x: parent.width - 22px;
+        y: (parent.height - 6px) / 2;
+        width: 10px;
+        height: 6px;
+        viewbox-width: 10;
+        viewbox-height: 6;
+        commands: root.open ? "M 1 5 L 5 1 L 9 5" : "M 1 1 L 5 5 L 9 1";
+        stroke: #979eaf;
+        stroke-width: 1.5px;
+        fill: transparent;
+    }
+    head := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled(root.absolute-position.x, root.absolute-position.y + root.height + 4px, root.width);
+        }
+    }
+}
+
+// The open list, with a full-window click catcher behind it. Place it as the last child
+// of the window. Esc is handled by the host (sets `open` to false); this handles
+// Up/Down/Enter and clicks.
+export component DropdownList inherits Rectangle {
+    in property <[string]> model;
+    in property <int> current-index: 0;
+    in property <length> list-x;
+    in property <length> list-y;
+    in property <length> list-width;
+    callback chosen(int);
+    // Click outside the list (including on the field).
+    callback dismissed();
+
+    property <int> highlight: root.current-index;
+
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+
+    TouchArea {
+        clicked => {
+            root.dismissed();
+        }
+    }
+    FocusScope {
+        init => {
+            self.focus();
+        }
+        key-pressed(event) => {
+            if event.text == Key.DownArrow {
+                root.highlight = min(root.highlight + 1, root.model.length - 1);
+                return accept;
+            } else if event.text == Key.UpArrow {
+                root.highlight = max(root.highlight - 1, 0);
+                return accept;
+            } else if event.text == Key.Return {
+                root.chosen(root.highlight);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Rectangle {
+        x: root.list-x;
+        y: root.list-y;
+        width: root.list-width;
+        height: root.model.length * 32px + 8px;
+        background: #252832;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: #343640;
+        // Swallow clicks so they do not reach the catcher below.
+        TouchArea { }
+        VerticalLayout {
+            padding: 4px;
+            for item[i] in root.model: Rectangle {
+                height: 32px;
+                border-radius: 6px;
+                background: i == root.highlight || row.has-hover ? #323646 : transparent;
+                Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: item;
+                    color: i == root.current-index ? #809cff : #f3f4f8;
+                    font-family: "Segoe UI";
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                row := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.chosen(i);
+                    }
+                }
+            }
+        }
+    }
+}
