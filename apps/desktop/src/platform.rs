@@ -212,6 +212,54 @@ pub fn alarm() {
 #[cfg(not(windows))]
 pub fn alarm() {}
 
+/// Task Manager stores the user's choice in `StartupApproved\Run` (binary).
+/// First byte even (0x02, 0x06) = enabled, odd (0x03, 0x07) = disabled by user.
+/// A missing or empty value counts as enabled.
+pub fn startup_approved_enabled(data: &[u8]) -> bool {
+    data.first().is_none_or(|b| b % 2 == 0)
+}
+#[cfg(windows)]
+const STARTUP_APPROVED_KEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+#[cfg(windows)]
+fn startup_approved_data() -> std::io::Result<Option<Vec<u8>>> {
+    use winreg::{
+        RegKey,
+        enums::{HKEY_CURRENT_USER, KEY_READ},
+    };
+    let key = match RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(STARTUP_APPROVED_KEY, KEY_READ)
+    {
+        Ok(k) => k,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    match key.get_raw_value("NexPanel") {
+        Ok(v) => Ok(Some(v.bytes.to_vec())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+/// Overwrite a user's "disabled" mark so enabling in NexPanel actually takes effect.
+#[cfg(windows)]
+fn enable_startup_approved() -> std::io::Result<()> {
+    use winreg::{RegKey, RegValue, enums::*};
+    match startup_approved_data()? {
+        Some(data) if !startup_approved_enabled(&data) => {
+            let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(STARTUP_APPROVED_KEY)?;
+            let mut bytes = vec![0u8; 12];
+            bytes[0] = 0x02;
+            key.set_raw_value(
+                "NexPanel",
+                &RegValue {
+                    bytes,
+                    vtype: REG_BINARY,
+                },
+            )
+        }
+        _ => Ok(()),
+    }
+}
 #[cfg(windows)]
 pub fn read_autostart() -> std::io::Result<bool> {
     use winreg::{
@@ -226,7 +274,8 @@ pub fn read_autostart() -> std::io::Result<bool> {
         Err(e) => return Err(e),
     };
     match key.get_value::<String, _>("NexPanel") {
-        Ok(v) => Ok(!v.trim().is_empty()),
+        Ok(v) if v.trim().is_empty() => Ok(false),
+        Ok(_) => Ok(startup_approved_data()?.is_none_or(|d| startup_approved_enabled(&d))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
@@ -240,7 +289,8 @@ pub fn write_autostart(enabled: bool) -> std::io::Result<()> {
         key.set_value(
             "NexPanel",
             &autostart_command(&std::env::current_exe()?.to_string_lossy()),
-        )
+        )?;
+        enable_startup_approved()
     } else {
         match key.delete_value("NexPanel") {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -489,6 +539,14 @@ mod tests {
         assert_eq!(tool_window_style(APP | 0x8, TOOL, APP), TOOL | 0x8);
         assert_eq!(tool_window_style(TOOL, TOOL, APP), TOOL);
         assert_eq!(tool_window_style(0, TOOL, APP), TOOL);
+    }
+    #[test]
+    fn startup_approved_byte_patterns() {
+        assert!(startup_approved_enabled(&[]));
+        assert!(startup_approved_enabled(&[0x02, 0, 0, 0]));
+        assert!(startup_approved_enabled(&[0x06, 0, 0, 0]));
+        assert!(!startup_approved_enabled(&[0x03, 1, 2, 3]));
+        assert!(!startup_approved_enabled(&[0x07]));
     }
     #[test]
     fn quotes_autostart_path() {
