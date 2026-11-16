@@ -121,7 +121,8 @@ fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
             return;
         }
     };
-    if output.send(backend.refresh()).is_err() {
+    let mut last = backend.refresh();
+    if output.send(last.clone()).is_err() {
         return;
     }
     loop {
@@ -162,8 +163,12 @@ fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
             native::Backend::refresh,
             native::Backend::write,
         );
-        if output.send(snapshot).is_err() {
-            return;
+        // Unchanged snapshots would only make the UI redo identical work.
+        if snapshot != last {
+            if output.send(snapshot.clone()).is_err() {
+                return;
+            }
+            last = snapshot;
         }
     }
 }

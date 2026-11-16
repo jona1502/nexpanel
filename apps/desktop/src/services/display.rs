@@ -66,7 +66,8 @@ pub fn diagnose() -> DisplaySnapshot {
 fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
     let mut b = native::Backend::new();
     b.discover();
-    if out.send(b.snapshot.clone()).is_err() {
+    let mut sent = b.snapshot.clone();
+    if out.send(sent.clone()).is_err() {
         return;
     }
     let mut active = true;
@@ -119,8 +120,12 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
             retry = true;
             b.snapshot.status = e;
         }
-        if (changed || refresh || due) && out.send(b.snapshot.clone()).is_err() {
-            return;
+        // Send only real changes; identical snapshots would just churn the UI.
+        if (changed || refresh || due) && b.snapshot != sent {
+            if out.send(b.snapshot.clone()).is_err() {
+                return;
+            }
+            sent = b.snapshot.clone();
         }
     }
 }
