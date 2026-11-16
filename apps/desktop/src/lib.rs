@@ -1,4 +1,5 @@
 pub mod config;
+pub mod logging;
 pub mod platform;
 pub mod services;
 pub mod settings_worker;

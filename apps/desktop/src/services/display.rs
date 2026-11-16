@@ -48,14 +48,16 @@ fn queue(
     Ok(())
 }
 /// Returns immediately; send Shutdown without joining from the UI thread.
-pub fn spawn() -> (Sender<DisplayCommand>, Receiver<DisplaySnapshot>) {
+pub fn spawn() -> (
+    Sender<DisplayCommand>,
+    Receiver<DisplaySnapshot>,
+    crate::logging::CrashFlag,
+) {
     let (tx, rx) = mpsc::channel();
     let (out, snap) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("display".into())
-        .spawn(move || run(rx, out))
-        .expect("display worker");
-    (tx, snap)
+    let crashed = crate::logging::CrashFlag::default();
+    crate::logging::spawn_worker("display", &crashed, move || run(rx, out));
+    (tx, snap, crashed)
 }
 /// Read-only discovery; call on a background thread, never the UI thread.
 pub fn diagnose() -> DisplaySnapshot {
@@ -67,6 +69,16 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
     let mut b = native::Backend::new();
     b.discover();
     let mut sent = b.snapshot.clone();
+    log::info!(
+        "Display-Erkennung: {} Monitor(e), regelbar: {}, Status: '{}'",
+        b.snapshot.devices.len(),
+        b.snapshot
+            .devices
+            .iter()
+            .filter(|d| d.brightness.is_some())
+            .count(),
+        b.snapshot.status
+    );
     if out.send(sent.clone()).is_err() {
         return;
     }
@@ -113,6 +125,7 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
         let changed = !pending.is_empty();
         for (id, value) in pending {
             if let Err(e) = b.write(&id, value) {
+                log::warn!("Helligkeit schreiben fehlgeschlagen ({id}): {e}");
                 error = Some(e);
             }
         }
@@ -322,6 +335,7 @@ mod native {
             let ts = match targets() {
                 Ok(v) => v,
                 Err(e) => {
+                    log::warn!("Monitor-Erkennung fehlgeschlagen: {e}");
                     self.snapshot.status = e;
                     return;
                 }
