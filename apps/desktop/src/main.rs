@@ -1133,7 +1133,10 @@ mod tests {
         assert_eq!(bounds.physical_size, (w, h), "Rust popup size");
         for p in ["preferred", "min", "max"] {
             assert!(compact.contains(&format!("{p}-width:{w}px;")), "{p}-width");
-            assert!(compact.contains(&format!("{p}-height:{h}px;")), "{p}-height");
+            assert!(
+                compact.contains(&format!("{p}-height:{h}px;")),
+                "{p}-height"
+            );
         }
         // The collapsible audio list must stay in the layout (no `if` around it).
         assert!(!compact.contains("ifroot.apps-open:"));
