@@ -103,7 +103,11 @@ Manuelle Tests (Panel offen und danach verborgen/neu geöffnet; Log: `NEXPANEL_L
 - Standardausgabegerät wechseln (z. B. Lautsprecher zu Kopfhörer) und Gerät ab-/anstecken: Master und Sitzungen wechseln auf das neue Gerät; kein Fehlerstatus dauerhaft.
 - Slider im Panel ziehen: kein Springen oder Abbrechen; eigene Änderungen führen nicht zu Flackern.
 - App starten, Panel mehrfach hintereinander öffnen und schließen: Liste ohne veraltete Einträge und ohne Flackern (beim Öffnen keine vollständige Neuerkennung, nur Werte und Master werden aufgefrischt).
-- Slider einer App ziehen, während dieselbe App einen weiteren Stream öffnet: Zeile bleibt, Ziehen bricht nicht ab, kein Fehler "Audio-Sitzung ist nicht mehr verfügbar" (Gruppen-ID ist `Endpunkt|pid`).
+- Slider einer App ziehen, während dieselbe App einen weiteren Stream öffnet: Zeile bleibt, Ziehen bricht nicht ab, kein Fehler "Audio-Sitzung ist nicht mehr verfügbar" (Gruppen-ID ist `Endpunkt|app:<Exe-Pfad>`).
+- Eine Zeile pro Anwendung (Gruppierung nach Exe-Pfad, nicht nach Prozess): Discord mit mehreren Fenstern/Sprachkanal, Chrome/Brave mit mehreren Tabs/Prozessen und Remote Desktop (mstsc) erscheinen jeweils genau einmal. Name und Icon stimmen.
+- Slider einer solchen Zeile ziehen: die ganze App (alle Sitzungen) folgt dem Slider-Wert (auch bei vorher unterschiedlichen Einzellautstärken); im Windows-Mixer ändern sich alle Einträge der App.
+- Mute-Icon einer solchen Zeile: die ganze App wird stumm bzw. wieder hörbar; die Zeile zeigt „stumm" nur, wenn alle Sitzungen stumm sind.
+- Zwei verschiedene Store-Apps (z. B. Rechner und Fotos) bleiben getrennte Zeilen.
 - Leerlauf bei verborgenem Panel: kaum CPU-Wakeups des Audio-Threads (Prozess-Explorer, Thread `nexpanel-audio`).
 - Beenden der App: kein Hängen, kein Absturz (Unregistrierung der Callbacks).
 
