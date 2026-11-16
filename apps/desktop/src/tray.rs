@@ -65,14 +65,20 @@ const ID_OPEN: u32 = 1;
 const ID_QUIT: u32 = 2;
 const ID_SETTINGS: u32 = 3;
 const ID_AUTOSTART: u32 = 4;
-/// Two activations closer than this are one user action (Space can send `NIN_SELECT` and
-/// `NIN_KEYSELECT`).
-const ACTIVATION_GAP_MS: u64 = 120;
+/// `NIN_SELECT` and `NIN_KEYSELECT` of one physical activation (Space/Enter) arrive this close.
+const ACTIVATION_GAP_MS: u64 = 40;
 const MAX_RETRIES: u8 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivationKind {
+    Select,
+    KeySelect,
+    Mouse,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Gesture {
-    Activate,
+    Activate(ActivationKind),
     ContextMenu,
     Balloon,
 }
@@ -86,10 +92,11 @@ fn decode(v4: bool, lparam: isize) -> Option<Gesture> {
         lparam as u32
     };
     match code {
-        NIN_SELECT | NIN_KEYSELECT => Some(Gesture::Activate),
+        NIN_SELECT => Some(Gesture::Activate(ActivationKind::Select)),
+        NIN_KEYSELECT => Some(Gesture::Activate(ActivationKind::KeySelect)),
         WM_CONTEXTMENU => Some(Gesture::ContextMenu),
         NIN_BALLOONUSERCLICK => Some(Gesture::Balloon),
-        WM_LBUTTONUP if !v4 => Some(Gesture::Activate),
+        WM_LBUTTONUP if !v4 => Some(Gesture::Activate(ActivationKind::Mouse)),
         WM_RBUTTONUP if !v4 => Some(Gesture::ContextMenu),
         _ => None,
     }
@@ -105,20 +112,30 @@ fn menu_event(id: u32) -> Option<TrayEvent> {
     }
 }
 
-/// Drops activations that follow the previous one within `ACTIVATION_GAP_MS`.
+/// Drops only the second half of one physical activation: `NIN_SELECT` directly followed by
+/// `NIN_KEYSELECT` (or vice versa). Two genuine clicks, even 50 ms apart, both pass.
 #[derive(Clone, Copy, Debug, Default)]
 struct ActivationFilter {
-    last: Option<u64>,
+    last: Option<(ActivationKind, u64)>,
 }
 impl ActivationFilter {
-    fn accept(&mut self, now_ms: u64) -> bool {
-        if self
-            .last
-            .is_some_and(|t| now_ms.saturating_sub(t) < ACTIVATION_GAP_MS)
+    fn accept(&mut self, kind: ActivationKind, now_ms: u64) -> bool {
+        let pair = |a: ActivationKind, b: ActivationKind| {
+            matches!(
+                (a, b),
+                (ActivationKind::Select, ActivationKind::KeySelect)
+                    | (ActivationKind::KeySelect, ActivationKind::Select)
+            )
+        };
+        if let Some((last_kind, t)) = self.last
+            && pair(last_kind, kind)
+            && now_ms.saturating_sub(t) < ACTIVATION_GAP_MS
         {
+            // The pair is consumed: a third event starts a new activation.
+            self.last = None;
             return false;
         }
-        self.last = Some(now_ms);
+        self.last = Some((kind, now_ms));
         true
     }
 }
@@ -141,6 +158,34 @@ impl Retry {
     }
 }
 
+/// `RegisterWindowMessageW` returns 0 on failure; 0 is `WM_NULL` and must not match.
+fn is_taskbar_created(msg: u32, registered: u32) -> bool {
+    registered != 0 && msg == registered
+}
+
+/// Text of a panic payload (`&str` or `String`, else a placeholder).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unbekannte Panik".into())
+}
+
+/// Runs `f`, logs a panic instead of unwinding. Returns false if it panicked.
+fn guarded(f: impl FnOnce()) -> bool {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(()) => true,
+        Err(payload) => {
+            log::error!(
+                "Panik im Tray-Handler abgefangen: {}",
+                panic_message(&*payload)
+            );
+            false
+        }
+    }
+}
+
 /// `x`/`y` packed into a v4 `wParam`: two signed 16 bit words (`GET_X_LPARAM`/`GET_Y_LPARAM`).
 fn anchor_from_wparam(wparam: usize) -> (i32, i32) {
     (
@@ -150,7 +195,7 @@ fn anchor_from_wparam(wparam: usize) -> (i32, i32) {
 }
 
 #[cfg(windows)]
-pub use win::{TrayHost, icon_rect, notify, tray_pressed};
+pub use win::{TrayHost, icon_rect, is_foreground, notify, tray_pressed};
 
 /// `p` inside `a` (right/bottom exclusive).
 fn contains(a: &crate::platform::Area, p: (i32, i32)) -> bool {
@@ -170,18 +215,17 @@ mod win {
                 Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON},
                 Shell::{
                     NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
-                    NIIF_RESPECT_QUIET_TIME, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-                    NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4,
-                    NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect,
-                    Shell_NotifyIconW,
+                    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFY_ICON_DATA_FLAGS,
+                    NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+                    NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect, Shell_NotifyIconW,
                 },
                 WindowsAndMessaging::{
                     AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
                     DestroyIcon, DestroyMenu, DestroyWindow, GWLP_USERDATA, GetCursorPos,
-                    GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU, KillTimer, MF_CHECKED,
-                    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW, RegisterClassW,
-                    RegisterWindowMessageW, SM_SWAPBUTTON, SetForegroundWindow, SetTimer,
-                    SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+                    GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU,
+                    KillTimer, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW,
+                    RegisterClassW, RegisterWindowMessageW, SM_SWAPBUTTON, SetForegroundWindow,
+                    SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
                     TPM_RIGHTBUTTON, TrackPopupMenuEx, WM_APP, WM_NULL, WM_TIMER, WNDCLASSW,
                     WS_EX_TOOLWINDOW, WS_POPUP,
                 },
@@ -239,7 +283,7 @@ mod win {
     }
 
     /// Shows a balloon/toast on the registered icon (UI thread). The shell plays its own
-    /// notification sound and suppresses it in quiet time. Returns false if the icon is not
+    /// notification sound; Focus Assist may still hide the balloon without any error. Returns false if the icon is not
     /// registered or the shell refused.
     pub fn notify(title: &str, text: &str) -> bool {
         let Some(id) = ICON.lock().ok().and_then(|g| *g) else {
@@ -252,7 +296,7 @@ mod win {
             uFlags: NIF_INFO,
             szInfo: wide(text),
             szInfoTitle: wide(title),
-            dwInfoFlags: NIIF_INFO | NIIF_RESPECT_QUIET_TIME,
+            dwInfoFlags: NIIF_INFO,
             ..Default::default()
         };
         if id.identity == Identity::Guid {
@@ -277,6 +321,27 @@ mod win {
             GetAsyncKeyState(key.0 as i32) < 0
         };
         down && contains(&rect, cursor())
+    }
+
+    /// True if `window` (the popup) is the foreground window. An unknown handle counts as
+    /// foreground so a failed lookup never closes the popup.
+    pub fn is_foreground(window: &slint::Window) -> bool {
+        use slint::winit_030::{
+            WinitWindowAccessor,
+            winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
+        };
+        window
+            .with_winit_window(|native| {
+                let Ok(handle) = native.window_handle() else {
+                    return true;
+                };
+                let RawWindowHandle::Win32(h) = handle.as_raw() else {
+                    return true;
+                };
+                // SAFETY: plain query without pointers.
+                unsafe { GetForegroundWindow() }.0 as isize == h.hwnd.get()
+            })
+            .unwrap_or(true)
     }
 
     /// State shared between `TrayHost` and the window procedure. Boxed, so the address stored
@@ -478,6 +543,12 @@ mod win {
             }
         }
 
+        /// Runs the application handler. A panic must not unwind through the `extern "system"`
+        /// window procedure (that aborts without `NIM_DELETE` or a settings flush).
+        fn call(&self, event: TrayEvent) {
+            guarded(|| (self.handler)(event));
+        }
+
         fn context_menu(&self, anchor: (i32, i32)) {
             if self.menu_open.replace(true) {
                 return;
@@ -485,18 +556,18 @@ mod win {
             let command = track_menu(self.hwnd.get(), anchor, (self.autostart)());
             self.menu_open.set(false);
             if let Some(event) = command.and_then(menu_event) {
-                (self.handler)(event);
+                self.call(event);
             }
         }
 
         fn on_tray(&self, wparam: usize, lparam: isize) {
             match decode(self.v4.get(), lparam) {
-                Some(Gesture::Activate) => {
+                Some(Gesture::Activate(kind)) => {
                     let mut filter = self.filter.get();
-                    let accepted = filter.accept(self.started.elapsed().as_millis() as u64);
+                    let accepted = filter.accept(kind, self.started.elapsed().as_millis() as u64);
                     self.filter.set(filter);
                     if accepted {
-                        (self.handler)(TrayEvent::Toggle);
+                        self.call(TrayEvent::Toggle);
                     }
                 }
                 Some(Gesture::ContextMenu) => {
@@ -507,7 +578,7 @@ mod win {
                     };
                     self.context_menu(anchor);
                 }
-                Some(Gesture::Balloon) => (self.handler)(TrayEvent::NotificationClicked),
+                Some(Gesture::Balloon) => self.call(TrayEvent::NotificationClicked),
                 None => {}
             }
         }
@@ -572,13 +643,13 @@ mod win {
                 shared.on_tray(wparam.0, lparam.0);
                 return LRESULT(0);
             }
-            if msg == shared.taskbar_created {
+            if is_taskbar_created(msg, shared.taskbar_created) {
                 shared.taskbar_created();
                 return LRESULT(0);
             }
             if msg == WM_POWERBROADCAST {
                 if let Some(event) = power_event(wparam.0) {
-                    (shared.handler)(event);
+                    shared.call(event);
                 }
                 // TRUE: request granted / ignored.
                 return LRESULT(1);
@@ -589,7 +660,7 @@ mod win {
             }
             if is_display_change(msg, wparam.0) {
                 // Only a signal; the display worker debounces. Default handling still runs.
-                (shared.handler)(TrayEvent::DisplayChange);
+                shared.call(TrayEvent::DisplayChange);
             }
         }
         // SAFETY: forwards the unchanged arguments of this window procedure.
@@ -680,6 +751,10 @@ pub fn notify(_: &str, _: &str) -> bool {
     false
 }
 #[cfg(not(windows))]
+pub fn is_foreground(_: &slint::Window) -> bool {
+    true
+}
+#[cfg(not(windows))]
 pub fn tray_pressed() -> bool {
     false
 }
@@ -703,10 +778,13 @@ mod tests {
     fn v4_uses_loword_of_lparam() {
         // High word carries the icon id in v4.
         let with_id = |code: u32| ((7u32 << 16) | code) as isize;
-        assert_eq!(decode(true, with_id(NIN_SELECT)), Some(Gesture::Activate));
+        assert_eq!(
+            decode(true, with_id(NIN_SELECT)),
+            Some(Gesture::Activate(ActivationKind::Select))
+        );
         assert_eq!(
             decode(true, with_id(NIN_KEYSELECT)),
-            Some(Gesture::Activate)
+            Some(Gesture::Activate(ActivationKind::KeySelect))
         );
         assert_eq!(
             decode(true, with_id(WM_CONTEXTMENU)),
@@ -723,7 +801,7 @@ mod tests {
     fn legacy_mode_uses_mouse_messages() {
         assert_eq!(
             decode(false, WM_LBUTTONUP as isize),
-            Some(Gesture::Activate)
+            Some(Gesture::Activate(ActivationKind::Mouse))
         );
         assert_eq!(
             decode(false, WM_RBUTTONUP as isize),
@@ -789,12 +867,50 @@ mod tests {
         assert!(!contains(&a, (9, 25)));
     }
     #[test]
-    fn activation_filter_collapses_double_notifications() {
+    fn activation_filter_collapses_select_keyselect_pair() {
+        use ActivationKind::*;
         let mut f = ActivationFilter::default();
-        assert!(f.accept(1000));
-        assert!(!f.accept(1010), "NIN_KEYSELECT right after NIN_SELECT");
-        assert!(f.accept(1000 + ACTIVATION_GAP_MS));
-        assert!(!f.accept(0), "clock going backwards is not a new click");
+        assert!(f.accept(Select, 1000));
+        assert!(!f.accept(KeySelect, 1010), "KEYSELECT right after SELECT");
+        assert!(f.accept(Select, 1020), "pair consumed, next is new");
+        let mut f = ActivationFilter::default();
+        assert!(f.accept(KeySelect, 1000));
+        assert!(!f.accept(Select, 1039));
+        let mut f = ActivationFilter::default();
+        assert!(f.accept(Select, 1000));
+        assert!(f.accept(KeySelect, 1000 + ACTIVATION_GAP_MS), "too late");
+    }
+    #[test]
+    fn fast_double_click_passes_filter() {
+        use ActivationKind::*;
+        for kind in [Select, KeySelect, Mouse] {
+            let mut f = ActivationFilter::default();
+            assert!(f.accept(kind, 1000));
+            assert!(f.accept(kind, 1050), "second genuine click {kind:?}");
+            assert!(
+                f.accept(kind, 1051),
+                "even 1 ms later: same kind is no pair"
+            );
+        }
+    }
+    #[test]
+    fn taskbar_created_zero_never_matches() {
+        assert!(!is_taskbar_created(0, 0), "WM_NULL vs failed registration");
+        assert!(!is_taskbar_created(0xC123, 0));
+        assert!(is_taskbar_created(0xC123, 0xC123));
+        assert!(!is_taskbar_created(0xC124, 0xC123));
+    }
+    #[test]
+    fn guarded_catches_panics_with_message() {
+        assert!(guarded(|| {}));
+        assert!(!guarded(|| panic!("kaputt {}", 1)));
+        assert!(!guarded(|| panic!("statisch")));
+        let p = std::panic::catch_unwind(|| panic!("abc")).unwrap_err();
+        assert_eq!(panic_message(&*p), "abc");
+        let p = std::panic::catch_unwind(|| panic!("n={}", 3)).unwrap_err();
+        assert_eq!(panic_message(&*p), "n=3");
+        let p = std::panic::catch_unwind(|| std::panic::panic_any(5u8)).unwrap_err();
+        assert_eq!(panic_message(&*p), "unbekannte Panik");
     }
     #[test]
     fn retry_is_bounded() {
