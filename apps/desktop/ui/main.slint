@@ -7,6 +7,20 @@ export struct AudioItem { id:string, name:string, value:int, muted:bool, master:
 component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
 component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
 component Card inherits Rectangle { background:#252832; border-radius:8px; }
+// Label | 3px bar | value. level: 0 accent, 1 amber (>=80 %), 2 red (>=95 %).
+component StatRow inherits Rectangle {
+ in property<string> label; in property<string> text; in property<int> pct; in property<int> level; in property<color> accent;
+ in property<bool> dimmed:false;
+ height:28px; opacity:root.dimmed?0.45:1;
+ HorizontalLayout {padding-left:4px;padding-right:4px;spacing:10px;
+  Text{width:40px;text:root.label;color:#b6bdcc;font-size:13px;vertical-alignment:center;}
+  Rectangle{horizontal-stretch:1;
+   Rectangle{y:(parent.height - 3px)/2;width:parent.width;height:3px;border-radius:1.5px;background:#343640;
+    Rectangle{x:0px;width:parent.width*max(0,min(100,root.pct))/100;height:3px;border-radius:1.5px;
+     background:root.level==2?#ff6b6b:root.level==1?#ffb56b:root.accent;}}}
+  Text{width:124px;text:root.text;color:#f3f4f8;font-size:13px;horizontal-alignment:right;vertical-alignment:center;overflow:elide;}
+ }
+}
 component TabButton inherits Rectangle {
  in property<string> text; in property<bool> active; in property<color> accent;
  callback clicked();
@@ -65,6 +79,12 @@ export component MainWindow inherits Window {
  in-out property<bool> apps-open:true;
  in property<string> display-status:"Monitore werden erkannt …";
  in property<string> audio-status:"Audio wird erkannt …";
+ in property<string> system-status:"Messung startet …";
+ in property<string> cpu-text:"—"; in property<int> cpu-pct; in property<int> cpu-level;
+ in property<string> ram-text:"—"; in property<int> ram-pct; in property<int> ram-level;
+ in property<string> gpu-text:"—"; in property<int> gpu-pct; in property<int> gpu-level; in property<bool> gpu-available:true;
+ in property<string> vram-text:"—"; in property<int> vram-pct; in property<int> vram-level;
+ in property<string> gpu-name;
  in property<string> settings-error;
  in property<bool> settings-ready:false;
  in property<bool> settings-blocked:false;
@@ -100,7 +120,7 @@ export component MainWindow inherits Window {
   close := TouchArea{clicked=>{root.hide-panel();}}}
  }
  HorizontalLayout {spacing:4px;
- for label[i] in ["Displays","Audio","Zeit","Einstellungen"]: TabButton {text:label; active:root.tab==i; accent:root.accent; clicked=>{root.tab=i;}}
+ for label[i] in ["Displays","Audio","Zeit","System","Einstellungen"]: TabButton {text:label; active:root.tab==i; accent:root.accent; clicked=>{root.tab=i;}}
  }
  Rectangle {height:1px;background:#343640;}
  if root.tab==1: VerticalLayout {vertical-stretch:1;spacing:6px;
@@ -200,7 +220,16 @@ export component MainWindow inherits Window {
  }}
  Hint{text:"Läuft auch bei verborgenem Panel und im Standby weiter. Beim App-Neustart werden beide Uhren zurückgesetzt.";font-size:11px;}
  }
- if root.tab==3: VerticalLayout {spacing:12px;alignment:start;
+ if root.tab==3: VerticalLayout {spacing:6px;alignment:start;
+ if root.system-status!="": Hint{text:root.system-status;font-size:11px;}
+ StatRow{label:"CPU";text:root.cpu-text;pct:root.cpu-pct;level:root.cpu-level;accent:root.accent;}
+ StatRow{label:"RAM";text:root.ram-text;pct:root.ram-pct;level:root.ram-level;accent:root.accent;}
+ Rectangle{height:16px;Text{x:4px;width:parent.width - 8px;text:root.gpu-name;color:#979eaf;font-size:11px;overflow:elide;vertical-alignment:center;}}
+ StatRow{label:"GPU";text:root.gpu-text;pct:root.gpu-pct;level:root.gpu-level;accent:root.accent;dimmed:!root.gpu-available;}
+ StatRow{label:"VRAM";text:root.vram-text;pct:root.vram-pct;level:root.vram-level;accent:root.accent;dimmed:!root.gpu-available;}
+ Hint{text:"Wird nur gemessen, solange dieser Tab offen ist.";font-size:11px;}
+ }
+ if root.tab==4: VerticalLayout {spacing:12px;alignment:start;
  Heading{text:"Einstellungen";}
  if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
  Card{VerticalLayout{padding:14px;spacing:12px;
