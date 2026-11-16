@@ -44,6 +44,11 @@ fn spawn_with_path(
                 error.push_str(&format!(" Autostart nicht lesbar: {e}"));
             }
         }
+        match (&path, blocked) {
+            (Ok(p), false) => log::info!("Einstellungen geladen: {}", p.display()),
+            (_, true) => log::warn!("Einstellungen nicht geladen: {error}"),
+            (Err(e), _) => log::warn!("Einstellungspfad unbekannt: {e}"),
+        }
         let _ = stx.send(Snapshot {
             config: current.clone(),
             error,
@@ -106,7 +111,10 @@ fn spawn_with_path(
                     blocked = false;
                     String::new()
                 }
-                Err(e) => format!("Einstellungen konnten nicht gespeichert werden: {e}"),
+                Err(e) => {
+                    log::error!("Einstellungen speichern fehlgeschlagen: {e}");
+                    format!("Einstellungen konnten nicht gespeichert werden: {e}")
+                }
             };
             last_failure = if error.is_empty() {
                 None

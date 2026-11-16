@@ -14,7 +14,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
   `main.rs` setzt dann jedes Mal ein neues `VecModel`, wodurch ein laufender Drag vermutlich
   abbricht. Fix: nur bei Änderung senden und das Modell inkrementell aktualisieren
   (`set_row_data`). Vorher manuell bestätigen.
-- [ ] **Stille Worker-Panics:** Es gibt keinen Panic-Hook und kein Logging. Stirbt der Display- oder
+- [x] **Stille Worker-Panics (feat/logging):** Es gibt keinen Panic-Hook und kein Logging. Stirbt der Display- oder
   Audio-Worker, bleibt die UI auf „wird erkannt …“ stehen.
 
 ## P1 – Fehlende Spec-Anforderungen
@@ -31,7 +31,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 - [ ] Timer: robust gegen Sprünge der Systemuhr machen und `WM_POWERBROADCAST` als Resume-Trigger nutzen.
   Echte Benachrichtigung statt erzwungenem Popup, das den Fokus stiehlt (ADR-008).
 - [ ] Kontextmenü um Einstellungen und Autostart erweitern.
-- [ ] Logging in eine Datei unter `%LOCALAPPDATA%\NexPanel`.
+- [x] Logging in eine Datei unter `%LOCALAPPDATA%\NexPanel\logs` (feat/logging).
 - [ ] Slint-Lizenzpfad festlegen, „Über“-Bereich mit `AboutSlint` (ADR-009).
 
 ## P2 – Verbesserungen

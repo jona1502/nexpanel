@@ -12,6 +12,7 @@ Der Gesamtreview über den v0.1-Branch steht aus; bisher liegen nur Reviews je T
 - Vier echte Slint-Renderer-Aufnahmen (Displays, Audio, Zeit, Einstellungen), 400 × 620, mit realen Gerätewerten: lesbar und unsupported Zeilen korrekt deaktiviert. Debug- und Release-Capture beendeten sich erfolgreich, ohne Einstellungsdatei oder verbleibenden App-Prozess. Capture prüft den Renderer, nicht native Tray-Interaktion.
 - Astro check: null Fehler/Warnungen/Hinweise. Statischer Build erfolgreich. Lokaler HTTP-Test: 200, deutscher Titel/Sprache, Viewport, Beispielwert-Kennzeichnung und tatsächlicher Repository-Link. Server danach gestoppt und Nichterreichbarkeit geprüft.
 - Release-ZIP erstellt; Inhalt: exe, install.ps1, uninstall.ps1, README.md; externe SHA256-Datei. Installiertes Binary stimmt mit Release-Binary überein, `--help` beendet erfolgreich. Isolierter Test ohne Shortcut: Installation, Upgrade, Deinstallation; settings.json und fremde Sentineldatei bleiben erhalten. Unverwaltete nichtleere Ziele und Deinstallation ohne passende Installationsmarkierung werden abgelehnt. PowerShell-Syntaxprüfung erfolgreich.
+- Logging: Logdatei unter `%LOCALAPPDATA%\NexPanel\logs\nexpanel.log` (Rotation >1 MB nach `nexpanel.old.log`). Level per Umgebungsvariable `NEXPANEL_LOG` (`error|warn|info|debug|trace`), Standard Info (Release) bzw. Debug.
 
 ## Reproduzieren
 

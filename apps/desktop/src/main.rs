@@ -15,6 +15,7 @@ use slint::{
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::atomic::Ordering,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 slint::include_modules!();
@@ -120,6 +121,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mode = parse_arguments(&args)?;
     let capture_mode = matches!(mode, Mode::Capture(_));
+    if mode != Mode::Help {
+        nexpanel::logging::init();
+        log::info!(
+            "NexPanel {} gestartet, Argumente: {args:?}",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
     if mode == Mode::Help {
         println!(
             "NexPanel 0.1\n  --background   Im Tray starten\n  --diagnostics  Display/Audio nur lesen und beenden\n  --capture-preview <Verzeichnis>  Vier echte UI-Tabs als PNG speichern, dann beenden (nur lesend)\n  --help         Hilfe"
@@ -166,8 +174,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let app = MainWindow::new()?;
-    let (dtx, drx) = services::display::spawn();
-    let (atx, arx) = services::audio::spawn();
+    let (dtx, drx, display_crashed) = services::display::spawn();
+    let (atx, arx, audio_crashed) = services::audio::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
     // Persistent models: rows are updated in place so a dragged slider survives.
     let display_model = Rc::new(VecModel::<DisplayRow>::default());
@@ -399,6 +407,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
     let mut visible = None;
+    let mut crash_shown = (false, false);
     tick.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(200),
@@ -445,6 +454,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     r.id.clone()
                 });
                 reconcile(&*audio_model, rows, |r| r.id.clone());
+            }
+            if !crash_shown.0 && display_crashed.load(Ordering::SeqCst) {
+                crash_shown.0 = true;
+                a.set_display_status("Display-Dienst abgestürzt – siehe Log".into());
+                a.set_displays(ModelRc::default());
+            }
+            if !crash_shown.1 && audio_crashed.load(Ordering::SeqCst) {
+                crash_shown.1 = true;
+                a.set_audio_status("Audio-Dienst abgestürzt – siehe Log".into());
+                a.set_audio(ModelRc::default());
             }
             if let Some(s) = srx.try_iter().last() {
                 apply_config(&a, &s.config);
@@ -547,6 +566,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The own tray host no longer keeps the loop alive; hiding the popup must not quit.
     slint::run_event_loop_until_quit()?;
     drop(tray);
+    log::info!("Event-Loop beendet, Worker werden gestoppt");
     tick.stop();
     capture_timer.stop();
     drop(capture_timer);

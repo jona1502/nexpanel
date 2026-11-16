@@ -151,10 +151,6 @@ mod win {
     const TIP: &str = "NexPanel – Systemsteuerung";
     const ICON_PNG: &[u8] = include_bytes!("../assets/tray.png");
 
-    fn trace(message: &str) {
-        eprintln!("[tray] {message}");
-    }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Identity {
         Guid,
@@ -313,13 +309,13 @@ mod win {
             let guid = self.data(Identity::Guid, Self::add_flags());
             let mut identity = Identity::Guid;
             if !self.notify(NIM_ADD, &guid) {
-                trace("NIM_ADD (GUID) fehlgeschlagen, versuche NIM_DELETE + NIM_ADD");
+                log::warn!("NIM_ADD (GUID) fehlgeschlagen, versuche NIM_DELETE + NIM_ADD");
                 self.notify(NIM_DELETE, &guid);
                 if !self.notify(NIM_ADD, &guid) {
-                    trace("NIM_ADD (GUID) erneut fehlgeschlagen, wechsle auf uID-Modus");
+                    log::warn!("NIM_ADD (GUID) erneut fehlgeschlagen, wechsle auf uID-Modus");
                     identity = Identity::Uid;
                     if !self.notify(NIM_ADD, &self.data(identity, Self::add_flags())) {
-                        trace("NIM_ADD (uID) fehlgeschlagen");
+                        log::error!("NIM_ADD (uID) fehlgeschlagen");
                         return false;
                     }
                 }
@@ -329,7 +325,7 @@ mod win {
             version.Anonymous.uVersion = NOTIFYICON_VERSION_4;
             let v4 = self.notify(NIM_SETVERSION, &version);
             if !v4 {
-                trace("NIM_SETVERSION fehlgeschlagen, nutze Legacy-Nachrichten");
+                log::warn!("NIM_SETVERSION fehlgeschlagen, nutze Legacy-Nachrichten");
             }
             self.v4.set(v4);
             if let Ok(mut icon) = ICON.lock() {
@@ -338,12 +334,12 @@ mod win {
                     identity,
                 });
             }
-            trace(&format!("Icon registriert ({identity:?}, v4={v4})"));
+            log::info!("Icon registriert ({identity:?}, v4={v4})");
             true
         }
 
         fn taskbar_created(&self) {
-            trace("TaskbarCreated empfangen");
+            log::info!("TaskbarCreated empfangen");
             // Stale registration (spurious broadcast) must not make NIM_ADD fail.
             self.delete();
             self.retry.set(Retry::new());
@@ -375,7 +371,7 @@ mod win {
                 self.cancel_retry();
             } else if !more {
                 self.cancel_retry();
-                trace("Icon konnte nicht erneut registriert werden, gebe auf");
+                log::error!("Icon konnte nicht erneut registriert werden, gebe auf");
             }
         }
 

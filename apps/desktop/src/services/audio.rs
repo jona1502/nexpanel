@@ -96,14 +96,16 @@ fn apply_group<T>(
     failure.map_or(Ok(()), Err)
 }
 
-pub fn spawn() -> (Sender<AudioCommand>, Receiver<AudioSnapshot>) {
+pub fn spawn() -> (
+    Sender<AudioCommand>,
+    Receiver<AudioSnapshot>,
+    crate::logging::CrashFlag,
+) {
     let (commands, input) = mpsc::channel();
     let (output, snapshots) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("nexpanel-audio".into())
-        .spawn(move || worker(input, output))
-        .expect("Audio-Worker konnte nicht gestartet werden");
-    (commands, snapshots)
+    let crashed = crate::logging::CrashFlag::default();
+    crate::logging::spawn_worker("nexpanel-audio", &crashed, move || worker(input, output));
+    (commands, snapshots, crashed)
 }
 pub fn diagnose() -> AudioSnapshot {
     native::diagnose()
@@ -114,6 +116,7 @@ fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
     let mut backend = match native::Backend::new() {
         Ok(backend) => backend,
         Err(error) => {
+            log::error!("Audio-Backend nicht verfügbar: {error}");
             let _ = output.send(AudioSnapshot {
                 status: error,
                 ..Default::default()
@@ -122,6 +125,12 @@ fn worker(input: Receiver<AudioCommand>, output: Sender<AudioSnapshot>) {
         }
     };
     let mut last = backend.refresh();
+    log::info!(
+        "Audio-Erkennung: Master: {}, Sitzungen: {}, Status: '{}'",
+        last.master.is_some(),
+        last.sessions.len(),
+        last.status
+    );
     if output.send(last.clone()).is_err() {
         return;
     }
@@ -182,6 +191,7 @@ fn run_batch<B>(
     let mut errors = Vec::new();
     for command in writes {
         if let Err(error) = write(backend, command) {
+            log::warn!("Audio schreiben fehlgeschlagen: {error}");
             errors.push(error);
         }
     }
