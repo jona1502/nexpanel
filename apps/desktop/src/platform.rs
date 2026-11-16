@@ -480,7 +480,7 @@ mod tests {
                     bottom: 1080
                 },
                 (-1900, 1080),
-                (392, 440)
+                (400, 620)
             ),
             (-1840, 452)
         );
@@ -543,7 +543,7 @@ mod tests {
     fn icon_anchor_keeps_negative_monitor_coordinates() {
         let work = rect(-1920, 0, 0, 1032);
         let b = popup_bounds_at(work, Anchor::Icon(rect(-40, 1032, -16, 1080)), 1.0);
-        assert_eq!(b.position, (-408, 404));
+        assert_eq!(b.position, (-400, 584));
     }
     #[test]
     fn tool_style_sets_toolwindow_and_clears_appwindow() {

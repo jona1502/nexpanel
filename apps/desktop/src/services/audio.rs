@@ -473,14 +473,16 @@ mod native {
     }
     /// Reads a bitmap as top-down 32-bit BGRA.
     fn bitmap_bgra(dc: HDC, bitmap: HBITMAP, width: i32, height: i32) -> Option<Vec<u8>> {
-        let mut info = BITMAPINFO::default();
-        info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
