@@ -39,8 +39,16 @@ pub enum Event {
     Esc,
     /// Open from elsewhere (startup, second instance, timer).
     ShowRequested,
-    /// The window is hidden now.
+    /// The window is hidden now. Also sent when it was hidden from outside (state not Closed
+    /// but window invisible).
     HideDone,
+    /// Periodic reconciliation. `focused`: the popup is the foreground window (or focus
+    /// closing is off). `tray_pressed`: primary button held over the tray icon, only
+    /// meaningful if [`Popup::needs_press_state`] asked for it.
+    Tick {
+        focused: bool,
+        tray_pressed: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +62,8 @@ pub enum Action {
 struct Blurred {
     at: u64,
     tray_pressed: bool,
+    /// First tick that saw the button released (only for press evidence).
+    released_at: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -80,6 +90,24 @@ impl Popup {
 
     pub fn state(&self) -> State {
         self.state
+    }
+
+    /// Should the caller sample the tray press state for the next `Tick`? Only when a lost
+    /// focus could close the popup or press evidence is waiting for its toggle.
+    pub fn needs_press_state(&self, focused: bool) -> bool {
+        match self.state {
+            State::Open | State::Opening => !focused,
+            _ => self.blurred.is_some_and(|b| b.tray_pressed),
+        }
+    }
+
+    fn blur(&mut self, tray_pressed: bool, now: u64) -> Action {
+        self.blurred = Some(Blurred {
+            at: now,
+            tray_pressed,
+            released_at: None,
+        });
+        self.close()
     }
 
     fn open(&mut self, now: u64) -> Action {
@@ -127,13 +155,33 @@ impl Popup {
             // Already visible: only bring it to front.
             (Event::TrayOpen | Event::ShowRequested, Open | Opening) => Action::Show,
             (Event::Blur { .. }, Opening) => Action::Nothing,
-            (Event::Blur { tray_pressed }, Open) => {
-                self.blurred = Some(Blurred {
-                    at: now_ms,
+            (Event::Blur { tray_pressed }, Open) => self.blur(tray_pressed, now_ms),
+            // Focus was lost without a blur event we could act on (the grace period swallowed
+            // it, or the shell took activation away): same as a late blur.
+            (
+                Event::Tick {
+                    focused: false,
                     tray_pressed,
-                });
-                self.close()
+                },
+                Open,
+            ) => self.blur(tray_pressed, now_ms),
+            (Event::Tick { tray_pressed, .. }, Closed) => {
+                // The press that closed the popup ended elsewhere: no toggle will follow.
+                // Grace of `BLUR_FALLBACK_MS` after the first sighting of the release, so a
+                // toggle that is still on its way is swallowed.
+                if let Some(b) = self.blurred.as_mut().filter(|b| b.tray_pressed) {
+                    if tray_pressed {
+                        b.released_at = None;
+                    } else {
+                        let since = *b.released_at.get_or_insert(now_ms);
+                        if now_ms.saturating_sub(since) >= BLUR_FALLBACK_MS {
+                            self.blurred = None;
+                        }
+                    }
+                }
+                Action::Nothing
             }
+            (Event::Tick { .. }, _) => Action::Nothing,
             (Event::Blur { .. }, Closed | Closing) => Action::Nothing,
             (Event::Esc, Open | Opening) => {
                 self.blurred = None;
@@ -256,6 +304,118 @@ mod tests {
         for (name, steps) in cases {
             run(name, steps);
         }
+    }
+
+    const TICK_LOST: Event = Tick {
+        focused: false,
+        tray_pressed: false,
+    };
+    const TICK_HELD: Event = Tick {
+        focused: true,
+        tray_pressed: true,
+    };
+    const TICK_FREE: Event = Tick {
+        focused: true,
+        tray_pressed: false,
+    };
+
+    #[test]
+    fn tick_transitions() {
+        let cases: &[(&str, &[Step])] = &[
+            (
+                "lost focus after grace closes",
+                &[OPEN, (TICK_LOST, 1200, Hide)],
+            ),
+            (
+                "lost focus within grace ignored (still opening)",
+                &[OPEN, (TICK_LOST, 1100, Nothing), (TrayToggle, 1120, Hide)],
+            ),
+            (
+                "grace expired without focus: closes on first tick",
+                &[OPEN, (BLUR, 1050, Nothing), (TICK_LOST, 1150, Hide)],
+            ),
+            (
+                "focused tick keeps open",
+                &[OPEN, (TICK_FREE, 5000, Nothing)],
+            ),
+            ("tick while closed", &[(TICK_LOST, 5, Nothing)]),
+            (
+                "lost focus then quick toggle swallowed (fallback)",
+                &[OPEN, (TICK_LOST, 2000, Hide), (TrayToggle, 2100, Nothing)],
+            ),
+            (
+                "external hide reconciled by HideDone, one click opens",
+                &[OPEN, (HideDone, 2000, Nothing), (TrayToggle, 2100, Show)],
+            ),
+        ];
+        for (name, steps) in cases {
+            run(name, steps);
+        }
+    }
+
+    #[test]
+    fn press_evidence_discarded_after_release_elsewhere() {
+        let mut p = Popup::new();
+        p.handle(TrayToggle, 1000);
+        assert_eq!(
+            p.handle(
+                Tick {
+                    focused: false,
+                    tray_pressed: true
+                },
+                1200
+            ),
+            Hide
+        );
+        p.handle(HideDone, 1200);
+        assert!(p.needs_press_state(true));
+        // Still held: evidence stays, however long.
+        p.handle(TICK_HELD, 2000);
+        p.handle(TICK_HELD, 4000);
+        // Released: kept for the grace so a toggle in flight is swallowed ...
+        p.handle(TICK_FREE, 4100);
+        p.handle(TICK_FREE, 4100 + BLUR_FALLBACK_MS - 1);
+        assert!(p.needs_press_state(true));
+        // ... then dropped.
+        p.handle(TICK_FREE, 4100 + BLUR_FALLBACK_MS);
+        assert!(!p.needs_press_state(true));
+        assert_eq!(
+            p.handle(TrayToggle, 4500),
+            Show,
+            "next real click not swallowed"
+        );
+    }
+
+    #[test]
+    fn toggle_in_flight_after_release_still_swallowed() {
+        let mut p = Popup::new();
+        p.handle(TrayToggle, 1000);
+        p.handle(
+            Tick {
+                focused: false,
+                tray_pressed: true,
+            },
+            1200,
+        );
+        p.handle(HideDone, 1200);
+        p.handle(TICK_FREE, 3000);
+        assert_eq!(p.handle(TrayToggle, 3050), Nothing);
+    }
+
+    #[test]
+    fn press_evidence_expires_by_age() {
+        let mut p = Popup::new();
+        p.handle(TrayToggle, 1000);
+        p.handle(
+            Tick {
+                focused: false,
+                tray_pressed: true,
+            },
+            1200,
+        );
+        p.handle(HideDone, 1200);
+        p.handle(TICK_HELD, 1200 + PRESS_MAX_MS + 1);
+        assert_eq!(p.handle(TrayToggle, 1200 + PRESS_MAX_MS + 2), Show);
     }
 
     #[test]
