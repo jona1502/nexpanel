@@ -21,12 +21,34 @@ pub enum DisplayCommand {
     SetActive(bool),
     Shutdown,
 }
+/// App icon as RGBA8 pixels. Equality is the cache key (hash of the exe path), so change-only
+/// snapshot sending never compares pixel data.
+#[derive(Clone)]
+pub struct AppIcon {
+    pub key: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: std::sync::Arc<[u8]>,
+}
+impl PartialEq for AppIcon {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+impl Eq for AppIcon {}
+impl std::fmt::Debug for AppIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AppIcon({:x}, {}x{})", self.key, self.width, self.height)
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioRow {
     pub id: String,
     pub name: String,
     pub volume: u8,
     pub muted: bool,
+    /// None for system sounds and when extraction failed (UI shows a letter tile).
+    pub icon: Option<AppIcon>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioSnapshot {
