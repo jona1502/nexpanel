@@ -32,6 +32,8 @@ pub struct AudioRow {
 pub struct AudioSnapshot {
     pub master: Option<AudioRow>,
     pub sessions: Vec<AudioRow>,
+    /// Friendly name of the default output device; empty when unknown.
+    pub device: String,
     pub status: String,
 }
 /// Coarse change signal from Core Audio callbacks (sent from foreign COM threads).
