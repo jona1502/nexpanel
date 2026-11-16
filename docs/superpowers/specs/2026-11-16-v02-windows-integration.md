@@ -170,7 +170,7 @@ Das eigentliche Control Center ist **kein normales Hauptfenster**:
 
 ### ADR-004 – Single Instance und Lebenszyklus (entschieden)
 
-- `CreateMutexW` mit stabil benanntem lokalen Mutex (`Local\NexPanel.SingleInstance`) verhindert die zweite Instanz. Mutex über die Lebenszeit halten.
+- `CreateMutexW` mit stabil benanntem lokalen Mutex (`Local\NexPanel.Panel`) verhindert die zweite Instanz. Mutex über die Lebenszeit halten.
 - Bei zweitem Programmstart kein zweites Tray-Icon erzeugen. Optional die erste Instanz über einen einfachen lokalen IPC-Kanal auffordern, das Popup zu öffnen; sonst die zweite Instanz kontrolliert beenden.
 - Bei Autostart plus manuellem Start und bei mehrfachen Doppelklicks testen.
 - Beim Explorer-Neustart läuft NexPanel weiter; sein Tray-Icon erscheint anschließend wieder.

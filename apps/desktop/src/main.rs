@@ -190,16 +190,20 @@ fn apply_countdown_action(
         timer.start(now);
     }
 }
+fn start_logging(args: &[String]) {
+    nexpanel::logging::init();
+    log::info!(
+        "NexPanel {} gestartet, Argumente: {args:?}",
+        env!("CARGO_PKG_VERSION")
+    );
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let mode = parse_arguments(&args)?;
     let capture_mode = matches!(mode, Mode::Capture(_));
-    if mode != Mode::Help {
-        nexpanel::logging::init();
-        log::info!(
-            "NexPanel {} gestartet, Argumente: {args:?}",
-            env!("CARGO_PKG_VERSION")
-        );
+    // Normal starts log only after `acquire` succeeded: a second instance must not touch the log.
+    if !matches!(mode, Mode::Help | Mode::Normal(_)) {
+        start_logging(&args);
     }
     if mode == Mode::Help {
         println!(
@@ -226,11 +230,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instance = if capture_mode {
         None
     } else {
-        match platform::Instance::acquire()? {
+        match platform::Instance::acquire(mode != Mode::Normal(true))? {
             Some(instance) => Some(instance),
             None => return Ok(()),
         }
     };
+    if matches!(mode, Mode::Normal(_)) {
+        start_logging(&args);
+    }
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("software".into())
