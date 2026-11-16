@@ -60,6 +60,10 @@ impl Countdown {
     pub fn is_running(&self) -> bool {
         self.clock.is_running()
     }
+    /// True once started (running, paused part-way or expired) until the next reset.
+    pub fn is_started(&self, now: u64) -> bool {
+        self.clock.elapsed_ms(now) > 0 || self.clock.is_running()
+    }
     pub fn poll_expired(&mut self, now: u64) -> bool {
         if self.expired || self.remaining_ms(now) != 0 {
             return false;

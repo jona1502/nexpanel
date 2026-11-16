@@ -1,5 +1,5 @@
 import { AboutCard } from "about.slint";
-import { VolumeSlider } from "volume_slider.slint";
+import { ThinSlider } from "thin_slider.slint";
 import { Button, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string }
@@ -13,6 +13,22 @@ component TabButton inherits Rectangle {
  Text{text:root.text;color:root.active?root.accent:#b6bdcc;font-size:13px;font-weight:root.active?600:400;horizontal-alignment:center;vertical-alignment:center;}
  ta := TouchArea{clicked=>{root.clicked();}}
 }
+component TimeSeg inherits Rectangle {
+ in property<string> text; in property<bool> active; in property<color> accent;
+ callback clicked(); callback scrolled(int);
+ width:56px; border-radius:6px; background:root.active?#343640:ta.has-hover?#2a2d38:transparent;
+ Text{text:root.text;color:root.active?root.accent:#f3f4f8;font-size:36px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
+ ta := TouchArea{clicked=>{root.clicked();}
+  scroll-event(e) => { if e.delta-y > 0 { root.scrolled(1); } else if e.delta-y < 0 { root.scrolled(-1); } return accept; }}
+}
+component ActionButton inherits Rectangle {
+ in property<string> text; in property<bool> primary:false;
+ callback clicked();
+ height:30px; horizontal-stretch:1; border-radius:6px;
+ background:root.primary?(ta.has-hover?#9bb2ff:#809cff):(ta.has-hover?#343640:#2b2e39);
+ Text{text:root.text;color:root.primary?#14161c:#f3f4f8;font-size:13px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
+ ta := TouchArea{mouse-cursor:pointer;clicked=>{root.clicked();}}
+}
 // Speaker glyph; `muted` swaps the sound waves for a cross. 16x16 viewbox, crisp at any scale.
 component SpeakerIcon inherits Rectangle {
  in property<bool> muted; in property<color> tint:#e6e7ee;
@@ -20,13 +36,19 @@ component SpeakerIcon inherits Rectangle {
  if !root.muted: Path{width:100%;height:100%;viewbox-width:16;viewbox-height:16;fill:transparent;stroke:root.tint;stroke-width:1.3px;commands:"M10.8 5.4 Q12.6 8 10.8 10.6 M12.6 3.6 Q16 8 12.6 12.4";}
  if root.muted: Path{width:100%;height:100%;viewbox-width:16;viewbox-height:16;fill:transparent;stroke:root.tint;stroke-width:1.3px;commands:"M11 5.5 L15 10.5 M15 5.5 L11 10.5";}
 }
+component MonitorIcon inherits Rectangle {
+ in property<color> tint:#e6e7ee;
+ Path{width:100%;height:100%;viewbox-width:16;viewbox-height:16;fill:transparent;stroke:root.tint;stroke-width:1.3px;commands:"M2 3.5 H14 V11 H2 Z M5.5 13.5 H10.5 M8 11 V13.5";}
+}
 // App icon (real icon when available), otherwise a rounded square with the first letter.
 component AppIcon inherits Rectangle {
  in property<string> letter; in property<bool> muted;
  callback clicked();
- width:24px; height:24px; border-radius:5px; background:#343640; opacity:root.muted?0.4:1;
- Text{text:root.letter;color:#e6e7ee;font-size:13px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
- TouchArea{mouse-cursor:pointer;clicked=>{root.clicked();}}
+ width:28px; height:28px; border-radius:6px; background:ta.has-hover?#2a2d38:transparent;
+ Rectangle{width:24px;height:24px;border-radius:5px;background:#343640;opacity:root.muted?0.4:1;
+  Text{text:root.letter;color:#e6e7ee;font-size:13px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}}
+ if root.muted: Path{x:root.width - 13px;y:root.height - 13px;width:10px;height:10px;viewbox-width:10;viewbox-height:10;fill:transparent;stroke:#ff8f8f;stroke-width:1.6px;commands:"M1 1 L9 9 M9 1 L1 9";}
+ ta := TouchArea{mouse-cursor:pointer;clicked=>{root.clicked();}}
 }
 export component MainWindow inherits Window {
  init => { Palette.color-scheme = ColorScheme.dark; }
@@ -54,10 +76,13 @@ export component MainWindow inherits Window {
  in property<bool> countdown-running:false;
  in property<bool> stopwatch-running:false;
  in property<bool> expired:false;
- in-out property<int> seconds:300;
+ in property<bool> countdown-active:false;
+ in-out property<int> time-seg:2;
+ in property<string> input-h:"00"; in property<string> input-m:"05"; in property<string> input-s:"00";
  out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#809cff;
  callback hide-panel(); callback refresh-display(); callback refresh-audio();
  callback brightness(string,int); callback volume(string,int); callback mute(string,bool);
+ callback time-digit(int); callback time-backspace(bool); callback time-step(int,int);
  callback save-settings(); callback reset-settings(); callback countdown-action(int); callback stopwatch-action(int);
  VerticalLayout {
  padding:10px; spacing:8px;
@@ -72,7 +97,7 @@ export component MainWindow inherits Window {
  for label[i] in ["Displays","Audio","Zeit","Einstellungen"]: TabButton {text:label; active:root.tab==i; accent:root.accent; clicked=>{root.tab=i;}}
  }
  Rectangle {height:1px;background:#343640;}
- if root.tab==1: VerticalLayout {vertical-stretch:1;spacing:6px;alignment:start;
+ if root.tab==1: VerticalLayout {vertical-stretch:1;spacing:6px;
  HorizontalLayout {height:26px;padding-left:4px;padding-right:4px;spacing:6px;
  Text{text:root.audio-device;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;vertical-alignment:center;}
  Rectangle {width:24px;
@@ -84,10 +109,11 @@ export component MainWindow inherits Window {
  VerticalLayout {spacing:0px;
  for row in root.audio: Rectangle {height:row.master?48px:0px;visible:row.master;
  HorizontalLayout {padding-left:4px;padding-right:4px;spacing:10px;
- Rectangle {width:28px;
+ Rectangle {width:32px;
+  Rectangle{width:32px;height:32px;border-radius:6px;background:mt.has-hover?#2a2d38:transparent;}
   SpeakerIcon{width:20px;height:20px;muted:row.muted;tint:row.muted?#8a8d99:#e6e7ee;}
-  TouchArea{mouse-cursor:pointer;clicked=>{root.mute(row.id,!row.muted);}}}
- VolumeSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+  mt := TouchArea{mouse-cursor:pointer;clicked=>{root.mute(row.id,!row.muted);}}}
+ ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
  Text{width:44px;text:row.value;color:row.muted?#8a8d99:#f3f4f8;font-size:22px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
@@ -96,8 +122,8 @@ export component MainWindow inherits Window {
  VerticalLayout {alignment:start;padding-top:4px;padding-bottom:4px;
  for row in root.audio: Rectangle {height:row.master?0px:36px;visible:!row.master;
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
- AppIcon{letter:row.initial;muted:row.muted;y:6px;clicked=>{root.mute(row.id,!row.muted);}}
- VolumeSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+ Rectangle{width:28px;AppIcon{letter:row.initial;muted:row.muted;clicked=>{root.mute(row.id,!row.muted);}}}
+ ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
  Text{width:36px;text:row.value;color:row.muted?#8a8d99:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
@@ -106,30 +132,66 @@ export component MainWindow inherits Window {
  }
  if root.tab!=1: ScrollView {vertical-stretch:1;
  VerticalLayout {spacing:8px;alignment:start; padding-right:6px;
- if root.tab==0: VerticalLayout {spacing:8px;alignment:start;
- HorizontalLayout {Heading{text:"Helligkeit";vertical-alignment:center;} Button{text:"Aktualisieren";clicked=>{root.refresh-display();}}}
- if root.display-status!="": Hint{text:root.display-status;}
- if root.displays.length==0: Card {min-height:64px;Text{text:"Keine Monitore verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
- for row in root.displays: Card {VerticalLayout {padding:10px;spacing:4px;
- HorizontalLayout {Text{text:row.name;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;}Text{text:row.supported?row.value+" %":"—";color:root.accent;font-size:13px;}}
- VolumeSlider {value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
- if row.status!="": Hint{text:row.status;font-size:11px;}
+ if root.tab==0: VerticalLayout {spacing:6px;alignment:start;
+ HorizontalLayout {height:26px;padding-left:4px;spacing:6px;
+ Text{text:"Helligkeit";color:#f3f4f8;font-size:13px;horizontal-stretch:1;vertical-alignment:center;}
+ Rectangle {width:64px;border-radius:6px;background:root.linked?#252832:link.has-hover?#1f222b:transparent;opacity:root.settings-ready?1:0.5;
+  Text{text:"Koppeln";color:root.linked?root.accent:#b6bdcc;font-size:12px;horizontal-alignment:center;vertical-alignment:center;}
+  link := TouchArea{enabled:root.settings-ready;mouse-cursor:pointer;clicked=>{root.linked=!root.linked;root.save-settings();}}}
+ Rectangle {width:26px;border-radius:6px;background:refresh.has-hover?#252832:transparent;
+  Path{width:14px;height:14px;viewbox-width:16;viewbox-height:16;fill:transparent;stroke:#b6bdcc;stroke-width:1.4px;commands:"M13.5 8 A5.5 5.5 0 1 1 11.6 3.9 M12 1 V4.5 H8.5";}
+  refresh := TouchArea{mouse-cursor:pointer;clicked=>{root.refresh-display();}}}
+ }
+ if root.display-status!="": Hint{text:root.display-status;font-size:11px;}
+ if root.displays.length==0: Hint{text:"Keine Monitore verfügbar";horizontal-alignment:center;}
+ Rectangle {background:#13151a;border-radius:8px;
+ VerticalLayout {padding-top:4px;padding-bottom:4px;spacing:0px;
+ for row in root.displays: VerticalLayout {spacing:0px;
+ if root.displays.length>1: Text{text:row.name;color:#979eaf;font-size:11px;overflow:elide;height:16px;x:42px;}
+ Rectangle {height:36px;opacity:row.supported?1:0.45;
+ HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
+ MonitorIcon{width:24px;height:24px;y:6px;tint:#e6e7ee;}
+ ThinSlider{horizontal-stretch:1;value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
+ Text{width:36px;text:row.supported?row.value:"—";color:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
- CheckBox{enabled:root.settings-ready;text:"Unterstützte Displays koppeln";checked:root.linked;toggled=>{root.linked=self.checked;root.save-settings();}}
+ if !row.supported && row.status!="": Text{text:row.status;color:#979eaf;font-size:11px;wrap:word-wrap;x:42px;}
+ }
+ }
+ }
  Hint{text:"Ohne DDC/CI oder interne Windows-Helligkeit bleibt ein Display sichtbar, aber nicht regelbar.";font-size:11px;}
  }
  if root.tab==2: VerticalLayout {spacing:8px;alignment:start;
- Heading{text:"Zeit für Fokus";}
- if root.expired: Rectangle {height:36px;background:#554125;border-radius:8px;Text{text:"✓  Dein Timer ist abgelaufen";color:#ffdb9a;horizontal-alignment:center;vertical-alignment:center;}}
- Card {VerticalLayout{padding:12px;spacing:8px;
+ if root.expired: Rectangle {height:30px;background:#554125;border-radius:8px;Text{text:"✓  Dein Timer ist abgelaufen";color:#ffdb9a;horizontal-alignment:center;vertical-alignment:center;}}
+ Card {VerticalLayout{padding:10px;spacing:6px;
  Hint{text:"COUNTDOWN";font-size:11px;}
- Text{text:root.countdown-text;color:root.expired?#ffcc88:root.accent;font-size:32px;font-weight:600;horizontal-alignment:center;}
- HorizontalLayout{Text{text:"Dauer (Sekunden)";color:#b6bdcc;vertical-alignment:center;} SpinBox{minimum:1;maximum:86400;value<=>root.seconds;enabled:!root.countdown-running;}}
- HorizontalLayout {spacing:8px;Button{text:root.expired?"Neu starten":root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} Button{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
+ if root.countdown-active: Text{height:48px;text:root.countdown-text;color:root.expired?#ffcc88:root.accent;font-size:36px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
+ if !root.countdown-active: Rectangle{height:48px;
+ timefocus := FocusScope{
+  init => {self.focus();}
+  key-pressed(e) => {
+   if e.text==Key.Return { root.countdown-action(0); return accept; }
+   if e.text==Key.Backspace { root.time-backspace(false); return accept; }
+   if e.text==Key.Delete { root.time-backspace(true); return accept; }
+   if e.text==Key.UpArrow { root.time-step(root.time-seg,1); return accept; }
+   if e.text==Key.DownArrow { root.time-step(root.time-seg,-1); return accept; }
+   if e.text==Key.LeftArrow { root.time-seg=max(0,root.time-seg - 1); return accept; }
+   if e.text==Key.RightArrow { root.time-seg=min(2,root.time-seg + 1); return accept; }
+   if e.text.character-count==1 && e.text.is-float() && e.text!="." { root.time-digit(round(e.text.to-float())); return accept; }
+   return reject;
+  }
+  HorizontalLayout{alignment:center;spacing:2px;
+   TimeSeg{text:root.input-h;active:timefocus.has-focus&&root.time-seg==0;accent:root.accent;clicked=>{root.time-seg=0;timefocus.focus();}scrolled(d)=>{root.time-step(0,d);}}
+   Text{text:":";color:#979eaf;font-size:36px;font-weight:600;vertical-alignment:center;}
+   TimeSeg{text:root.input-m;active:timefocus.has-focus&&root.time-seg==1;accent:root.accent;clicked=>{root.time-seg=1;timefocus.focus();}scrolled(d)=>{root.time-step(1,d);}}
+   Text{text:":";color:#979eaf;font-size:36px;font-weight:600;vertical-alignment:center;}
+   TimeSeg{text:root.input-s;active:timefocus.has-focus&&root.time-seg==2;accent:root.accent;clicked=>{root.time-seg=2;timefocus.focus();}scrolled(d)=>{root.time-step(2,d);}}
+  }
  }}
- Card{VerticalLayout{padding:12px;spacing:8px; Hint{text:"STOPPUHR";font-size:11px;}
- Text{text:root.stopwatch-text;color:#f3f4f8;font-size:32px;font-weight:600;horizontal-alignment:center;}
- HorizontalLayout{spacing:8px;Button{text:root.stopwatch-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.stopwatch-action(0);}}Button{text:"Zurücksetzen";clicked=>{root.stopwatch-action(1);}}}
+ HorizontalLayout {spacing:8px;ActionButton{text:root.expired?"Neu starten":root.countdown-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.countdown-action(0);}} ActionButton{text:"Zurücksetzen";clicked=>{root.countdown-action(1);}}}
+ }}
+ Card{VerticalLayout{padding:10px;spacing:6px; Hint{text:"STOPPUHR";font-size:11px;}
+ Text{height:48px;text:root.stopwatch-text;color:#f3f4f8;font-size:36px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
+ HorizontalLayout{spacing:8px;ActionButton{text:root.stopwatch-running?"Pause":"Start / Weiter";primary:true;clicked=>{root.stopwatch-action(0);}}ActionButton{text:"Zurücksetzen";clicked=>{root.stopwatch-action(1);}}}
  }}
  Hint{text:"Läuft auch bei verborgenem Panel und im Standby weiter. Beim App-Neustart werden beide Uhren zurückgesetzt.";font-size:11px;}
  }

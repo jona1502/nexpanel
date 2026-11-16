@@ -5,6 +5,7 @@ pub mod platform;
 pub mod popup_state;
 pub mod services;
 pub mod settings_worker;
+pub mod time_input;
 pub mod time_tools;
 pub mod tray;
 pub mod ui_models;
