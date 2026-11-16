@@ -25,11 +25,21 @@ Cargo-/Astro-Befehle stehen in [Setup](setup.md). Distribution:
 
 Der Distributionstest verwendet einen eigenen GUID-Ordner im Temp-Verzeichnis, keine Shortcut-Erstellung und keinen Registry-Schreibtest. Er startet das installierte Binary nur mit `--help`. Seine Testdateien bleiben zur Prüfung im ausgegebenen Temp-Pfad erhalten. Die Deinstallation liest den realen Autostartwert, entfernt ihn aber nur bei exakter Übereinstimmung mit dem temporären Installationspfad. Der Test setzt oder aktiviert keinen Autostart.
 
+## Manuelle Tests Timer (Benachrichtigung, Standby, Systemuhr)
+
+Nur manuell prüfbar; nicht automatisiert.
+
+1. Benachrichtigung: Tab Zeit, Countdown 10 s starten, Panel schließen. Nach Ablauf erscheint die Windows-Benachrichtigung „NexPanel – Timer abgelaufen“ (mit Systemton, außer in Ruhezeit/Nicht stören). Das Panel öffnet sich nicht und stiehlt keinen Fokus: in einer Vollbild-App (Spiel/Video) läuft die Eingabe ungestört weiter. Genau eine Benachrichtigung je Ablauf.
+2. Klick auf die Benachrichtigung öffnet das Panel auf dem Tab Zeit mit Ablauf-Banner. Bei bereits sichtbarem Panel erscheint nur das Banner, kein Fokuswechsel.
+3. Standby: Countdown 2 min starten, Rechner in Standby, nach > 2 min aufwecken. Nach dem Aufwachen erscheint sofort (ohne bis zu 200 ms Tick abzuwarten) genau eine Benachrichtigung; Log enthält keine Uhrwarnung.
+4. Standby kürzer als Restzeit: Restzeit nach dem Aufwachen entspricht der Restzeit minus Standbydauer (Standby zählt mit).
+5. Systemuhr: Countdown 2 min und Stoppuhr starten, Systemzeit um 1 h vor bzw. zurück stellen. Restzeit und Stoppuhr laufen unverändert weiter; `nexpanel.log` enthält eine Warnung „Systemuhr sprang um … ms“.
+
 ## Noch nicht empirisch bewiesen
 
 Native Tray-Klicks, Esc/Fokusübergänge, mehrere DPI-/Taskleistenkonfigurationen, echte Hardware-Schreibzugriffe einschließlich Wiederherstellung, WMI-Schreiben, Betriebssystem-Schlaf, Hotplug, reale Audio-Gerätewechsel und fremde Rechner. Zwei erkannte Monitore dieses Systems erlauben keine DDC-Helligkeitsregelung; das ist sichtbar und keine behauptete gelöste Treiberbeschränkung.
 
-Langsame synchrone DDC-/WMI-Treiber können den jeweiligen Worker blockieren; kein harter abbrechbarer Treibertimeout. UI bleibt vom Worker getrennt. Audio aktualisiert per Polling. Tray-Positionierung nutzt den Cursor-Monitor als dokumentierten Fallback, nicht private Tray-Icon-Geometrie. Das Panel wird bei hoher DPI oder kleinen Arbeitsbereichen auf die verfügbare Fläche mit Rand verkleinert; Inhalte bleiben scrollbar. Countdown folgt Systemzeitänderungen; Timerzustand wird nicht über App-Neustarts gespeichert.
+Langsame synchrone DDC-/WMI-Treiber können den jeweiligen Worker blockieren; kein harter abbrechbarer Treibertimeout. UI bleibt vom Worker getrennt. Audio aktualisiert per Polling. Tray-Positionierung nutzt den Cursor-Monitor als dokumentierten Fallback, nicht private Tray-Icon-Geometrie. Das Panel wird bei hoher DPI oder kleinen Arbeitsbereichen auf die verfügbare Fläche mit Rand verkleinert; Inhalte bleiben scrollbar. Countdown und Stoppuhr laufen auf der monotonen Uhr `QueryInterruptTime` (zählt Standby mit) und folgen Systemzeitsprüngen nicht; Sprünge > 2 s werden als Warnung geloggt. Timerzustand wird nicht über App-Neustarts gespeichert.
 
 Bekannte kleinere Lücken der Distribution: Der Konflikt mit einer fremden Startmenü-Verknüpfung wird erst nach dem Kopieren erkannt. Die Schutzpfade für abweichende Installationsmarkierung, verbotene Ziele, Verzeichnisverknüpfungen und gesperrte Pfade sind nicht alle getestet.
 

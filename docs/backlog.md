@@ -28,7 +28,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 - [ ] Toggle-Race über eine Zustandsmaschine statt der 250-ms-Heuristik lösen; Press-and-Hold abdecken.
 - [ ] Audio über Events statt Polling: `IMMNotificationClient`, `IAudioSessionNotification`
   (vorher `GetSessionEnumerator` aufrufen), `IAudioEndpointVolumeCallback`. Kein Voll-Refresh pro Write.
-- [ ] Timer: robust gegen Sprünge der Systemuhr machen und `WM_POWERBROADCAST` als Resume-Trigger nutzen.
+- [x] Timer: robust gegen Sprünge der Systemuhr machen und `WM_POWERBROADCAST` als Resume-Trigger nutzen.
   Echte Benachrichtigung statt erzwungenem Popup, das den Fokus stiehlt (ADR-008).
 - [ ] Kontextmenü um Einstellungen und Autostart erweitern.
 - [x] Logging in eine Datei unter `%LOCALAPPDATA%\NexPanel\logs` (feat/logging).
