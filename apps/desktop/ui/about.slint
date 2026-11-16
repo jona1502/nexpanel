@@ -1,0 +1,15 @@
+import { AboutSlint, Button } from "std-widgets.slint";
+
+// Inline "Über NexPanel" card. Satisfies Slint Royalty-free License 2.0 (AboutSlint), see docs/licensing.md.
+export component AboutCard inherits Rectangle {
+ in property<string> version;
+ in property<color> accent:#86a6ff;
+ background:#20242e; border-radius:12px; border-width:1px; border-color:#303642;
+ VerticalLayout { padding:14px; spacing:10px;
+ Text{text:"NexPanel";color:root.accent;font-size:18px;font-weight:700;}
+ Text{text:"Version "+root.version;color:#b6bdcc;}
+ Text{text:"github.com/jona1502/nexpanel";color:#979eaf;font-size:12px;}
+ Text{text:"Lizenz von NexPanel: noch nicht festgelegt.";color:#979eaf;font-size:12px;wrap:word-wrap;}
+ AboutSlint { preferred-height:130px; }
+ }
+}
