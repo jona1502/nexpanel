@@ -34,6 +34,8 @@ Zustandsmaschine: `apps/desktop/src/popup_state.rs` (tabellengetriebene Unit-Tes
 | M5 | Checkbox im Einstellungs-Tab umschalten, dann Menü öffnen | Häkchen im Menü entspricht der Checkbox |
 | M6 | Menü „Beenden“ | App beendet sich, Icon verschwindet |
 | M7 | Maustasten vertauscht (Windows-Einstellung) und P2/P3 wiederholen | Wie P2/P3 |
+| M8 | Autostart aktiv, NexPanel läuft; manuell nochmal `nexpanel.exe --background` starten | Zweite Instanz endet still, Panel der laufenden öffnet sich nicht, Log `nexpanel.log` unverändert und intakt |
+| M9 | Run-Wert „NexPanel“ auf alten/falschen Pfad setzen (Testprofil), Einstellungen öffnen | Autostart-Checkbox/Menühäkchen zeigt „aus“; Einschalten schreibt den aktuellen Pfad |
 
 ## Reproduzieren
 

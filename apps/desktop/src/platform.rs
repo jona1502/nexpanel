@@ -14,6 +14,11 @@ pub fn popup_position(a: Area, c: (i32, i32), s: (i32, i32)) -> (i32, i32) {
 pub fn autostart_command(path: &str) -> String {
     format!("\"{path}\" --background")
 }
+/// True if the stored Run value is exactly what enabling autostart would write for `exe`
+/// (stale/moved path, other quoting or missing `--background` all count as not active).
+pub fn autostart_matches(stored: &str, exe: &str) -> bool {
+    stored.trim().eq_ignore_ascii_case(&autostart_command(exe))
+}
 #[derive(Debug)]
 pub struct PopupBounds {
     pub position: (i32, i32),
@@ -94,6 +99,10 @@ fn tool_window_style(ex_style: u32, tool: u32, app: u32) -> u32 {
 }
 /// Sets `WS_EX_TOOLWINDOW` and clears `WS_EX_APPWINDOW` on the popup's `HWND`. Cheap and
 /// idempotent, so call it after every show in case winit reset the style.
+/// Limitation (Review F14): Slint creates the winit window lazily and shows it right away, and
+/// winit's attribute hook cannot set extended styles, so on the very first show the style is
+/// applied just after it. `with_skip_taskbar(true)` (DeleteTab at creation) keeps the taskbar
+/// button away; only Alt-Tab may list the window until then.
 #[cfg(windows)]
 pub fn hide_from_alt_tab(window: &slint::Window) {
     use slint::winit_030::{
@@ -275,6 +284,7 @@ pub fn read_autostart() -> std::io::Result<bool> {
     };
     match key.get_value::<String, _>("NexPanel") {
         Ok(v) if v.trim().is_empty() => Ok(false),
+        Ok(v) if !autostart_matches(&v, &std::env::current_exe()?.to_string_lossy()) => Ok(false),
         Ok(_) => Ok(startup_approved_data()?.is_none_or(|d| startup_approved_enabled(&d))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
@@ -378,7 +388,9 @@ pub struct Instance {
 }
 #[cfg(windows)]
 impl Instance {
-    pub fn acquire() -> Result<Option<Self>, Box<dyn std::error::Error>> {
+    /// With `signal_open` a second instance asks the running one to open its panel;
+    /// without it (autostart `--background`) it exits silently.
+    pub fn acquire(signal_open: bool) -> Result<Option<Self>, Box<dyn std::error::Error>> {
         use windows::{
             Win32::{
                 Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError},
@@ -397,7 +409,9 @@ impl Instance {
                 }
             };
             if exists {
-                let _ = SetEvent(open);
+                if signal_open {
+                    let _ = SetEvent(open);
+                }
                 let _ = CloseHandle(open);
                 let _ = CloseHandle(mutex);
                 return Ok(None);
@@ -570,6 +584,20 @@ mod tests {
         assert!(startup_approved_enabled(&[0x06, 0, 0, 0]));
         assert!(!startup_approved_enabled(&[0x03, 1, 2, 3]));
         assert!(!startup_approved_enabled(&[0x07]));
+    }
+    #[test]
+    fn autostart_value_must_match_current_exe() {
+        let exe = r"C:\Program Files\NexPanel\nexpanel.exe";
+        let good = autostart_command(exe);
+        assert!(autostart_matches(&good, exe));
+        assert!(autostart_matches(&format!(" {good} "), exe));
+        assert!(!autostart_matches(
+            &autostart_command(r"C:\old\nexpanel.exe"),
+            exe
+        ));
+        assert!(!autostart_matches(&format!(r#""{exe}""#), exe));
+        assert!(!autostart_matches(&format!("{exe} --background"), exe));
+        assert!(!autostart_matches("", exe));
     }
     #[test]
     fn quotes_autostart_path() {
