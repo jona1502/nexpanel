@@ -212,6 +212,7 @@ mod win {
             Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
             System::LibraryLoader::GetModuleHandleW,
             UI::{
+                HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi},
                 Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON},
                 Shell::{
                     NIF_GUID, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
@@ -224,10 +225,10 @@ mod win {
                     DestroyIcon, DestroyMenu, DestroyWindow, GWLP_USERDATA, GetCursorPos,
                     GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW, HICON, HMENU,
                     KillTimer, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, PostMessageW,
-                    RegisterClassW, RegisterWindowMessageW, SM_SWAPBUTTON, SetForegroundWindow,
-                    SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-                    TPM_RIGHTBUTTON, TrackPopupMenuEx, WM_APP, WM_NULL, WM_TIMER, WNDCLASSW,
-                    WS_EX_TOOLWINDOW, WS_POPUP,
+                    RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_SWAPBUTTON,
+                    SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN,
+                    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx, WM_APP,
+                    WM_NULL, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
                 },
             },
         },
@@ -245,7 +246,13 @@ mod win {
     #[cfg(not(debug_assertions))]
     const TRAY_GUID: GUID = GUID::from_u128(0x2c91d7a3_41be_4f08_b5e6_9a07d3c8e152);
     const TIP: &str = "NexPanel – Systemsteuerung";
-    const ICON_PNG: &[u8] = include_bytes!("../assets/tray.png");
+    /// Embedded `assets/tray-<px>.png`, same order as `platform::TRAY_ICON_SIZES`.
+    const ICON_PNGS: [(u32, &[u8]); 4] = [
+        (16, include_bytes!("../assets/tray-16.png")),
+        (20, include_bytes!("../assets/tray-20.png")),
+        (24, include_bytes!("../assets/tray-24.png")),
+        (32, include_bytes!("../assets/tray-32.png")),
+    ];
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Identity {
@@ -348,7 +355,7 @@ mod win {
     /// in `GWLP_USERDATA` stays valid for the lifetime of the host.
     struct Shared {
         hwnd: Cell<HWND>,
-        hicon: HICON,
+        hicon: Cell<HICON>,
         taskbar_created: u32,
         identity: Cell<Identity>,
         v4: Cell<bool>,
@@ -371,12 +378,12 @@ mod win {
             handler: Box<dyn Fn(TrayEvent)>,
             autostart: Box<dyn Fn() -> bool>,
         ) -> windows::core::Result<Self> {
-            let hicon = create_icon()?;
+            let hicon = create_icon(small_icon_px(None))?;
             // SAFETY: plain call, the name is a NUL terminated literal.
             let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
             let shared = Box::new(Shared {
                 hwnd: Cell::new(HWND::default()),
-                hicon,
+                hicon: Cell::new(hicon),
                 taskbar_created,
                 identity: Cell::new(Identity::Guid),
                 v4: Cell::new(false),
@@ -424,7 +431,7 @@ mod win {
             unsafe {
                 SetWindowLongPtrW(s.hwnd.get(), GWLP_USERDATA, 0);
                 let _ = DestroyWindow(s.hwnd.get());
-                let _ = DestroyIcon(s.hicon);
+                let _ = DestroyIcon(s.hicon.get());
             }
         }
     }
@@ -445,7 +452,7 @@ mod win {
                 uID: TRAY_UID,
                 uFlags: flags,
                 uCallbackMessage: WM_TRAY,
-                hIcon: self.hicon,
+                hIcon: self.hicon.get(),
                 szTip: tip,
                 ..Default::default()
             };
@@ -506,13 +513,34 @@ mod win {
             true
         }
 
+        /// Re-picks the icon size for the current DPI; on change swaps the `HICON` via
+        /// `NIM_MODIFY` and destroys the old one afterwards.
+        fn refresh_icon(&self) {
+            let px = small_icon_px(Some(self.hwnd.get()));
+            let Ok(new) = create_icon(px) else {
+                return;
+            };
+            let old = self.hicon.replace(new);
+            let mut data = self.data(self.identity.get(), NIF_ICON);
+            data.hIcon = new;
+            if !self.notify(NIM_MODIFY, &data) {
+                log::warn!("NIM_MODIFY (Icon) fehlgeschlagen");
+            }
+            // SAFETY: `old` was created by `create_icon` and is no longer referenced.
+            unsafe {
+                let _ = DestroyIcon(old);
+            }
+        }
+
         fn taskbar_created(&self) {
             log::info!("TaskbarCreated empfangen");
             // Stale registration (spurious broadcast) must not make NIM_ADD fail.
             self.delete();
             self.retry.set(Retry::new());
             self.cancel_retry();
-            if !self.register() {
+            if self.register() {
+                self.refresh_icon();
+            } else {
                 self.schedule_retry();
             }
         }
@@ -660,6 +688,7 @@ mod win {
             }
             if is_display_change(msg, wparam.0) {
                 // Only a signal; the display worker debounces. Default handling still runs.
+                shared.refresh_icon();
                 shared.call(TrayEvent::DisplayChange);
             }
         }
@@ -697,9 +726,29 @@ mod win {
         }
     }
 
+    /// Shipped icon size for the small-icon metric at the DPI of `hwnd` (system DPI fallback).
+    fn small_icon_px(hwnd: Option<HWND>) -> u32 {
+        // SAFETY: plain queries; a stale/invalid window yields 0 and falls back to system DPI.
+        let dpi = unsafe {
+            let window = hwnd.map_or(0, |h| GetDpiForWindow(h));
+            if window == 0 {
+                GetDpiForSystem()
+            } else {
+                window
+            }
+        };
+        // SAFETY: plain query.
+        let metric = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) };
+        crate::platform::pick_icon_px(metric.max(1) as u32)
+    }
+
     /// `HICON` from the embedded PNG (straight-alpha BGRA, like winit's window icons).
-    fn create_icon() -> windows::core::Result<HICON> {
-        let image = image::load_from_memory_with_format(ICON_PNG, image::ImageFormat::Png)
+    fn create_icon(px: u32) -> windows::core::Result<HICON> {
+        let png = ICON_PNGS
+            .iter()
+            .find(|(size, _)| *size == px)
+            .map_or(ICON_PNGS[ICON_PNGS.len() - 1].1, |(_, png)| png);
+        let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
             .map_err(|e| {
                 windows::core::Error::new(
                     windows::Win32::Foundation::E_FAIL,

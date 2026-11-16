@@ -440,9 +440,12 @@ impl Drop for Instance {
 pub const TRAY_ICON_SIZES: [u32; 4] = [16, 20, 24, 32];
 /// Pick the shipped tray icon size closest to the system small-icon size
 /// (`16 * dpi / 96` px); ties go to the larger icon, above 32 px the largest.
-/// TODO: not wired into tray.rs yet (see docs/backlog.md).
 pub fn pick_icon_size(dpi: u32) -> u32 {
-    let wanted = (16 * dpi.max(1) + 48) / 96;
+    pick_icon_px((16 * dpi.max(1) + 48) / 96)
+}
+
+/// Shipped tray icon size closest to `wanted` px (e.g. `SM_CXSMICON`); ties go to the larger.
+pub fn pick_icon_px(wanted: u32) -> u32 {
     TRAY_ICON_SIZES
         .into_iter()
         .min_by_key(|s| (s.abs_diff(wanted), u32::MAX - s))
@@ -576,6 +579,13 @@ mod tests {
         assert_eq!(pick_icon_size(192), 32);
         assert_eq!(pick_icon_size(480), 32);
         assert_eq!(pick_icon_size(0), 16);
+    }
+    #[test]
+    fn picks_tray_icon_size_for_small_icon_metric() {
+        for (metric, want) in [(16, 16), (20, 20), (24, 24), (32, 32), (40, 32), (48, 32)] {
+            assert_eq!(pick_icon_px(metric), want, "SM_CXSMICON {metric}");
+        }
+        assert_eq!(pick_icon_px(22), 24);
     }
     #[test]
     fn startup_approved_byte_patterns() {
