@@ -6,6 +6,8 @@ export component ThinSlider inherits Rectangle {
  in property<bool> enabled:true;
  callback changed(float);
  callback released();
+ out property<bool> hovered:ta.has-hover;
+ out property<bool> pressed:ta.pressed;
  min-height:20px;
  property<length> thumb:10px;
  property<bool> dragging:false;

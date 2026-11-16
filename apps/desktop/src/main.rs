@@ -242,6 +242,7 @@ fn dispatch(app: &MainWindow, popup: &RefCell<Popup>, event: Event, ms: u64) {
         Action::Show => show(app),
         Action::Hide => {
             app.set_dropdown_open(false);
+            app.set_tip_visible(false);
             let _ = app.hide();
             popup.borrow_mut().handle(Event::HideDone, ms);
         }
@@ -444,6 +445,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .handle(Event::Blur { tray_pressed }, ms());
                     if action == Action::Hide {
                         app.set_dropdown_open(false);
+                        app.set_tip_visible(false);
                         let _ = window.hide();
                         blur_popup.borrow_mut().handle(Event::HideDone, ms());
                     }
@@ -459,6 +461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     EscAction::CloseDropdown => {
                         if let Some(app) = weak.upgrade() {
                             app.set_dropdown_open(false);
+                            app.set_tip_visible(false);
                         }
                     }
                     EscAction::ClosePanel => {
@@ -466,6 +469,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         popup.handle(Event::Esc, ms());
                         if let Some(app) = weak.upgrade() {
                             app.set_dropdown_open(false);
+                            app.set_tip_visible(false);
                         }
                         let _ = window.hide();
                         popup.handle(Event::HideDone, ms());
@@ -898,6 +902,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Window hidden from outside: reconcile, or the next toggle would hide nothing.
             if !active && tick_popup.borrow().state() != State::Closed {
                 a.set_dropdown_open(false);
+                a.set_tip_visible(false);
                 tick_popup.borrow_mut().handle(Event::HideDone, ms());
             }
             // Fallback for a missed blur (grace period, shell stole activation) and for
@@ -1157,6 +1162,24 @@ mod tests {
                 "05-einstellungen.png"
             ]
         );
+    }
+    #[test]
+    fn hover_tip_overlay_is_last_and_clamps_to_window() {
+        let ui: String = include_str!("../ui/main.slint")
+            .split_whitespace()
+            .collect();
+        let tip = ui.find("HoverTip{").expect("overlay");
+        let dropdown = ui
+            .find("ifroot.dropdown-open:DropdownList")
+            .expect("dropdown");
+        assert!(tip > dropdown, "tooltip is the last overlay");
+        assert!(ui[tip..].matches("}").count() >= 1 && !ui[tip..].contains("TouchArea"));
+        let tooltip: String = include_str!("../ui/tooltip.slint")
+            .split_whitespace()
+            .collect();
+        assert!(tooltip.contains("min(label.preferred-width+20px,300px)"));
+        assert!(tooltip.contains("root.width-self.width-4px"));
+        assert!(tooltip.contains("interval:450ms"));
     }
     #[test]
     fn panel_size_is_fixed_in_slint() {

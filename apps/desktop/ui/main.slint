@@ -1,6 +1,7 @@
 import { AboutCard } from "about.slint";
 import { ThinSlider } from "thin_slider.slint";
 import { Dropdown, DropdownList } from "dropdown.slint";
+import { TipRow, HoverTip } from "tooltip.slint";
 import { Button, ScrollView, CheckBox, SpinBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool }
@@ -59,6 +60,7 @@ component MonitorIcon inherits Rectangle {
 component AppIcon inherits Rectangle {
  in property<string> letter; in property<bool> muted; in property<image> icon; in property<bool> has-icon;
  callback clicked();
+ out property<bool> hovered:ta.has-hover; out property<bool> pressed:ta.pressed;
  width:28px; height:28px; border-radius:6px; background:ta.has-hover?#2a2d38:transparent;
  if root.has-icon: Image{source:root.icon;width:24px;height:24px;opacity:root.muted?0.4:1;}
  if !root.has-icon: Rectangle{width:24px;height:24px;border-radius:5px;background:#343640;opacity:root.muted?0.4:1;
@@ -94,6 +96,8 @@ export component MainWindow inherits Window {
  in-out property<bool> autostart:false;
  // True while a dropdown list is open; Rust sets it to false to close it (Esc, panel hide).
  in-out property<bool> dropdown-open:false;
+ // Tooltip state; `HoverTip` at the end of the window draws it.
+ property<string> tip-text; property<length> tip-x; property<length> tip-y; property<length> tip-h; in-out property<bool> tip-visible:false;
  property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
  property<length> dd-x; property<length> dd-y; property<length> dd-w;
  in property<string> countdown-text:"00:05:00";
@@ -105,6 +109,8 @@ export component MainWindow inherits Window {
  in-out property<int> time-seg:2;
  in property<string> input-h:"00"; in property<string> input-m:"05"; in property<string> input-s:"00";
  out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#809cff;
+ function show-tip(t:string,x:length,y:length,h:length,s:bool){root.tip-text=t;root.tip-x=x;root.tip-y=y;root.tip-h=h;root.tip-visible=s;}
+ changed tab => { root.tip-visible=false; }
  callback hide-panel(); callback refresh-display(); callback refresh-audio();
  callback brightness(string,int); callback volume(string,int); callback mute(string,bool);
  callback time-digit(int); callback time-backspace(bool); callback time-step(int,int);
@@ -129,23 +135,23 @@ export component MainWindow inherits Window {
  if root.audio-status!="": Hint{text:root.audio-status;}
  if root.audio.length==0: Hint{text:"Kein Audiogerät verfügbar";horizontal-alignment:center;}
  VerticalLayout {spacing:0px;
- for row in root.audio: Rectangle {height:row.master?48px:0px;visible:row.master;
+ for row in root.audio: TipRow {height:row.master?48px:0px;visible:row.master;text:root.audio-device;inner-hover:mt.has-hover||msl.hovered;inner-pressed:mt.pressed||msl.pressed;tip(t,x,y,h,s)=>{root.show-tip(t,x,y,h,s);}
  HorizontalLayout {padding-left:4px;padding-right:4px;spacing:10px;
  Rectangle {width:32px;
   Rectangle{width:32px;height:32px;border-radius:6px;background:mt.has-hover?#2a2d38:transparent;}
   SpeakerIcon{width:20px;height:20px;muted:row.muted;tint:row.muted?#8a8d99:#e6e7ee;}
   mt := TouchArea{mouse-cursor:pointer;clicked=>{root.mute(row.id,!row.muted);}}}
- ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+ msl := ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
  Text{width:44px;text:row.value;color:row.muted?#8a8d99:#f3f4f8;font-size:22px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
  Rectangle {vertical-stretch:1;background:#13151a;border-radius:8px;
  ScrollView {
  VerticalLayout {alignment:start;padding-top:4px;padding-bottom:4px;
- for row in root.audio: Rectangle {height:row.master?0px:36px;visible:!row.master;
+ for row in root.audio: TipRow {height:row.master?0px:36px;visible:!row.master;text:row.name;inner-hover:aic.hovered||asl.hovered;inner-pressed:aic.pressed||asl.pressed;tip(t,x,y,h,s)=>{root.show-tip(t,x,y,h,s);}
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
- Rectangle{width:28px;AppIcon{letter:row.initial;icon:row.icon;has-icon:row.has-icon;muted:row.muted;clicked=>{root.mute(row.id,!row.muted);}}}
- ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+ Rectangle{width:28px;aic := AppIcon{letter:row.initial;icon:row.icon;has-icon:row.has-icon;muted:row.muted;clicked=>{root.mute(row.id,!row.muted);}}}
+ asl := ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
  Text{width:36px;text:row.value;color:row.muted?#8a8d99:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
@@ -170,10 +176,10 @@ export component MainWindow inherits Window {
  VerticalLayout {padding-top:4px;padding-bottom:4px;spacing:0px;
  for row in root.displays: VerticalLayout {spacing:0px;
  if root.displays.length>1||!row.supported: Text{text:row.supported?row.name:row.name+" · "+row.status;color:#979eaf;font-size:11px;overflow:elide;height:16px;x:42px;}
- Rectangle {height:36px;opacity:row.supported?1:0.45;
+ TipRow {height:36px;opacity:row.supported?1:0.45;text:row.name;inner-hover:dsl.hovered;inner-pressed:dsl.pressed;tip(t,x,y,h,s)=>{root.show-tip(t,x,y,h,s);}
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
  Rectangle{width:28px;MonitorIcon{width:24px;height:24px;}}
- ThinSlider{horizontal-stretch:1;value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
+ dsl := ThinSlider{horizontal-stretch:1;value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
  Text{width:36px;text:row.supported?row.value:"—";color:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
@@ -246,4 +252,5 @@ export component MainWindow inherits Window {
  if root.dropdown-open: DropdownList{model:root.accent-names;current-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y;list-width:root.dd-w;
   chosen(i)=>{root.accent-index=i;root.dropdown-open=false;root.save-settings();}
   dismissed=>{root.dropdown-open=false;}}
+ HoverTip{text:root.tip-text;anchor-x:root.tip-x;anchor-y:root.tip-y;anchor-h:root.tip-h;shown:root.tip-visible&&!root.dropdown-open;}
 }
