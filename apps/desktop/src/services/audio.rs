@@ -10,6 +10,12 @@ struct Member<T> {
     instance: String,
     pid: u32,
     system: bool,
+    /// Executable image path (`QueryFullProcessImageNameW`), if the process is readable.
+    path: Option<String>,
+    /// `IAudioSessionControl2::GetSessionIdentifier` (contains the exe path), may be empty.
+    session_id: String,
+    /// Session display name (UWP/Store apps), may be empty.
+    display: String,
     name: String,
     volume: u8,
     muted: bool,
@@ -19,18 +25,61 @@ struct Member<T> {
 struct Group<T> {
     row: AudioRow,
     members: Vec<Member<T>>,
+    /// Row name already comes from a member with a readable process.
+    named_from_process: bool,
 }
 fn normalized(value: u8) -> u8 {
     value.min(100)
 }
+/// Case-insensitive, slash-normalized key part.
+fn normalize_key(text: &str) -> String {
+    text.trim().replace('/', "\\").to_lowercase()
+}
+/// Store/UWP frame hosts: the exe path says nothing about the actual app.
+fn is_store_host(path: &str) -> bool {
+    let file = normalize_key(path);
+    let file = file.rsplit('\\').next().unwrap_or("");
+    matches!(file, "applicationframehost.exe" | "wwahost.exe")
+}
+/// Exe path part of a `GetSessionIdentifier` value
+/// (`{endpoint}|<exe path>%b<pid>`); None when it has no usable path.
+fn identifier_path(identifier: &str) -> Option<&str> {
+    let rest = identifier.split_once('|')?.1;
+    let rest = rest.split("%b").next().unwrap_or(rest).trim();
+    (!rest.is_empty()).then_some(rest)
+}
+/// Application key of a member; the group id is `endpoint|<key>`.
+/// Order: system sounds; Store host -> display name; exe path; path in the
+/// session identifier; display name; `pid:N`.
+fn app_key<T>(member: &Member<T>) -> String {
+    if member.system {
+        return "system".to_owned();
+    }
+    let display = member.display.trim();
+    if let Some(path) = member.path.as_deref().filter(|p| !p.trim().is_empty()) {
+        if is_store_host(path) {
+            // Unrelated Store apps share one host exe: keep them apart by name.
+            if !display.is_empty() {
+                return format!("app:store:{}", normalize_key(display));
+            }
+            return format!("app:pid:{}", member.pid);
+        }
+        return format!("app:{}", normalize_key(path));
+    }
+    if let Some(path) = identifier_path(&member.session_id)
+        && !is_store_host(path)
+    {
+        return format!("app:{}", normalize_key(path));
+    }
+    if !display.is_empty() {
+        return format!("app:name:{}", normalize_key(display));
+    }
+    format!("app:pid:{}", member.pid)
+}
 fn groups<T>(endpoint: &str, members: Vec<Member<T>>) -> Vec<Group<T>> {
     let mut grouped: BTreeMap<String, Group<T>> = BTreeMap::new();
     for member in members {
-        let key = if member.system {
-            "system".to_owned()
-        } else {
-            format!("pid:{}", member.pid)
-        };
+        let key = app_key(&member);
         let group = grouped.entry(key.clone()).or_insert_with(|| Group {
             row: AudioRow {
                 id: format!("{endpoint}|{key}"),
@@ -44,10 +93,15 @@ fn groups<T>(endpoint: &str, members: Vec<Member<T>>) -> Vec<Group<T>> {
                 icon: None,
             },
             members: vec![],
+            named_from_process: member.path.is_some(),
         });
         // Instance identifiers validate the fresh enumeration and prevent duplicates.
         if group.members.iter().any(|m| m.instance == member.instance) {
             continue;
+        }
+        if !member.system && !group.named_from_process && member.path.is_some() {
+            group.row.name = member.name.clone();
+            group.named_from_process = true;
         }
         group.row.volume = group.row.volume.max(normalized(member.volume));
         group.row.muted &= member.muted;
@@ -57,8 +111,9 @@ fn groups<T>(endpoint: &str, members: Vec<Member<T>>) -> Vec<Group<T>> {
         group.members.push(member);
     }
     grouped
-        // The id is only `endpoint|pid`: sessions of one process may come and go
-        // (even during a drag) without changing it. Instances are member data only.
+        // The id is only `endpoint|app:<key>`: sessions/processes of one application
+        // may come and go (even during a drag) without changing it. PIDs and
+        // instances are member data only.
         .into_values()
         .collect()
 }
@@ -79,14 +134,22 @@ fn apply_group<T>(
         .iter()
         .find(|g| g.row.id == id)
         .expect("validated group");
-    // Continue after individual errors so one disappearing session cannot skip others.
-    let mut failure = None;
+    // Every member gets the same value (a slider move equalizes all sessions of
+    // the app). Continue after errors so one disappearing session cannot skip
+    // others; the command only fails when every member failed.
+    let mut last_error = None;
+    let mut failed = 0;
     for index in indices {
         if let Err(error) = write(&group.members[index].control) {
-            failure = Some(error);
+            log::warn!("Audio-Sitzung konnte nicht geschrieben werden: {error}");
+            failed += 1;
+            last_error = Some(error);
         }
     }
-    failure.map_or(Ok(()), Err)
+    match last_error {
+        Some(error) if failed == group.members.len() => Err(error),
+        _ => Ok(()),
+    }
 }
 
 /// Recompute the aggregated row of a group after member volumes changed in place.
@@ -437,12 +500,6 @@ mod native {
         .ok()?;
         Some(String::from_utf16_lossy(&buffer[..length as usize]))
     }
-    fn process_name(pid: u32) -> Option<String> {
-        let path = process_path(pid)?;
-        std::path::Path::new(&path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-    }
 
     /// Owned GDI bitmap, deleted on drop.
     struct Bitmap(HBITMAP);
@@ -562,8 +619,8 @@ mod native {
         /// Per exe path; failures are cached too so a broken icon is not retried on every refresh.
         static ICONS: std::cell::RefCell<HashMap<String, Option<AppIcon>>> = Default::default();
     }
-    fn app_icon(pid: u32) -> Option<AppIcon> {
-        let path = process_path(pid)?;
+    fn app_icon(path: &str) -> Option<AppIcon> {
+        let path = path.to_owned();
         ICONS.with(|cache| {
             cache
                 .borrow_mut()
@@ -827,19 +884,33 @@ mod native {
                             .GetDisplayName()
                             .map(|s| Allocation(s).string())
                             .unwrap_or_default();
-                        let name = process_name(pid)
-                            .filter(|s| !s.is_empty())
-                            .or_else(|| (!display.trim().is_empty()).then_some(display))
+                        let path = if system { None } else { process_path(pid) };
+                        let session_id = extended
+                            .GetSessionIdentifier()
+                            .map(|s| Allocation(s).string())
+                            .unwrap_or_default();
+                        let icon = path.as_deref().and_then(app_icon);
+                        let host = path.as_deref().is_some_and(is_store_host);
+                        let from_process = path
+                            .as_deref()
+                            .and_then(|p| std::path::Path::new(p).file_stem())
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .filter(|s| !s.is_empty());
+                        let shown = (!display.trim().is_empty()).then(|| display.clone());
+                        let name = if host { shown.clone().or(from_process) } else { from_process.or(shown) }
                             .unwrap_or_else(|| format!("Anwendung {pid}"));
                         Ok(Some((
                             Member {
                                 instance,
                                 pid,
                                 system,
+                                path,
+                                session_id,
+                                display,
                                 name,
                                 volume: percent(volume.GetMasterVolume()?),
                                 muted: volume.GetMute()?.as_bool(),
-                                icon: if system { None } else { app_icon(pid) },
+                                icon,
                                 control: volume,
                             },
                             control,
@@ -1083,6 +1154,9 @@ mod tests {
             instance: instance.into(),
             pid,
             system: false,
+            path: Some(format!(r"C:\Apps\P{pid}.exe")),
+            session_id: String::new(),
+            display: String::new(),
             name: "App".into(),
             volume,
             muted,
@@ -1113,9 +1187,9 @@ mod tests {
             vec![member("a", 7, 20, true), member("b", 7, 80, false)],
         );
         assert_eq!(target_indices(&g, &g[0].row.id), Ok(vec![0, 1]));
-        assert!(target_indices(&g, "old|pid:7").is_err());
-        assert!(target_indices(&g, "endpoint|pid:8").is_err());
-        assert!(target_indices::<()>(&[], "endpoint|pid:7").is_err());
+        assert!(target_indices(&g, "old|app:c:\\apps\\p7.exe").is_err());
+        assert!(target_indices(&g, "endpoint|app:c:\\apps\\p8.exe").is_err());
+        assert!(target_indices::<()>(&[], "endpoint|app:c:\\apps\\p7.exe").is_err());
     }
     #[test]
     fn new_session_same_pid_keeps_id() {
@@ -1162,6 +1236,9 @@ mod tests {
             instance: id.into(),
             pid: 9,
             system: false,
+            path: Some(r"C:\Apps\P9.exe".into()),
+            session_id: String::new(),
+            display: String::new(),
             name: "App".into(),
             volume: 1,
             muted: false,
@@ -1182,7 +1259,7 @@ mod tests {
             vec![(100, true), (100, true)]
         );
         assert!(
-            apply_group(&g, "stale|pid:9", |c| {
+            apply_group(&g, "stale|app:c:\\apps\\p9.exe", |c| {
                 c.set((0, false));
                 Ok(())
             })
@@ -1191,7 +1268,7 @@ mod tests {
         assert!(g[0].members.iter().all(|m| m.control.get() == (100, true)));
     }
     #[test]
-    fn grouped_write_continues_after_one_member_disappears() {
+    fn grouped_write_tolerates_partial_failure_but_fails_when_all_fail() {
         use std::cell::Cell;
         let g = groups(
             "e",
@@ -1207,18 +1284,20 @@ mod tests {
                     Ok(())
                 }
             })
-            .is_err()
+            .is_ok()
         );
         assert_eq!(calls.get(), 2);
+        let all_fail = apply_group(&g, &g[0].row.id, |_| Err("gone".into()));
+        assert!(all_fail.is_err());
     }
 
     #[test]
     fn group_id_is_stable_across_instances_and_order() {
         let old = groups("e", vec![member("old-instance", 7, 20, false)]);
         let current = groups("e", vec![member("replacement", 7, 20, false)]);
-        assert_eq!(old[0].row.id, "e|pid:7");
+        assert_eq!(old[0].row.id, "e|app:c:\\apps\\p7.exe");
         assert_eq!(target_indices(&current, &old[0].row.id), Ok(vec![0]));
-        assert!(target_indices(&current, "e|pid:8").is_err());
+        assert!(target_indices(&current, "e|app:c:\\apps\\p8.exe").is_err());
         let reversed = groups(
             "e",
             vec![member("b", 7, 20, false), member("a", 7, 20, false)],
@@ -1230,12 +1309,15 @@ mod tests {
         assert_eq!(reversed[0].row.id, ordered[0].row.id);
     }
     #[test]
-    fn batch_reports_refreshed_partial_group_write_and_keeps_read_status() {
+    fn batch_reports_failed_group_write_and_keeps_read_status() {
         use std::cell::Cell;
         let make = |id: &str| Member {
             instance: id.into(),
             pid: 7,
             system: false,
+            path: Some(r"C:\Apps\P7.exe".into()),
+            session_id: String::new(),
+            display: String::new(),
             name: "App".into(),
             volume: 20,
             muted: false,
@@ -1268,19 +1350,126 @@ mod tests {
                     unreachable!()
                 };
                 apply_group(g, &id, |control| {
-                    if std::ptr::eq(control, &g[0].members[0].control) {
-                        Err("Sitzung verschwunden".into())
-                    } else {
-                        control.set(value);
-                        Ok(())
-                    }
+                    let _ = (control, value);
+                    Err("Sitzung verschwunden".into())
                 })
             },
         );
-        assert_eq!(snapshot.sessions[0].volume, 80);
+        assert_eq!(snapshot.sessions[0].volume, 20);
         assert!(snapshot.status.contains("Lesestatus"));
         assert!(snapshot.status.contains("Sitzung verschwunden"));
     }
+    fn app(instance: &str, pid: u32, path: Option<&str>, volume: u8, muted: bool) -> Member<()> {
+        Member {
+            path: path.map(Into::into),
+            ..member(instance, pid, volume, muted)
+        }
+    }
+    #[test]
+    fn discord_like_processes_form_one_group() {
+        let exe = r"C:\Users\u\AppData\Local\Discord\app-1\Discord.exe";
+        let g = groups(
+            "e",
+            vec![
+                app("a", 10, Some(exe), 40, false),
+                app(
+                    "b",
+                    11,
+                    Some(&exe.to_uppercase().replace('\\', "/")),
+                    70,
+                    false,
+                ),
+                app("c", 12, Some(exe), 10, true),
+            ],
+        );
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].members.len(), 3);
+        assert_eq!(g[0].row.volume, 70);
+        assert!(!g[0].row.muted);
+    }
+    #[test]
+    fn different_exes_with_same_display_name_stay_separate() {
+        let mut a = app("a", 1, Some(r"C:\x\one.exe"), 10, false);
+        let mut b = app("b", 2, Some(r"C:\y\two.exe"), 10, false);
+        a.name = "Same".into();
+        b.name = "Same".into();
+        a.display = "Same".into();
+        b.display = "Same".into();
+        assert_eq!(groups("e", vec![a, b]).len(), 2);
+    }
+    #[test]
+    fn id_is_stable_when_member_sessions_come_and_go() {
+        let exe = r"C:\Apps\Chrome.exe";
+        let one = groups("e", vec![app("a", 1, Some(exe), 10, false)]);
+        let two = groups(
+            "e",
+            vec![
+                app("a", 1, Some(exe), 10, false),
+                app("b", 2, Some(exe), 30, false),
+            ],
+        );
+        let other = groups("e", vec![app("b", 9, Some(exe), 30, false)]);
+        assert_eq!(one[0].row.id, two[0].row.id);
+        assert_eq!(one[0].row.id, other[0].row.id);
+        assert_eq!(one[0].row.id, r"e|app:c:\apps\chrome.exe");
+        assert_eq!(target_indices(&two, &one[0].row.id), Ok(vec![0, 1]));
+    }
+    #[test]
+    fn mute_only_when_all_members_muted_and_volume_is_max() {
+        let exe = r"C:\Apps\A.exe";
+        let mixed = groups(
+            "e",
+            vec![
+                app("a", 1, Some(exe), 10, true),
+                app("b", 2, Some(exe), 55, false),
+            ],
+        );
+        assert!(!mixed[0].row.muted);
+        assert_eq!(mixed[0].row.volume, 55);
+        let all = groups(
+            "e",
+            vec![
+                app("a", 1, Some(exe), 10, true),
+                app("b", 2, Some(exe), 55, true),
+            ],
+        );
+        assert!(all[0].row.muted);
+    }
+    #[test]
+    fn system_sounds_stay_separate_even_with_same_path() {
+        let exe = r"C:\Apps\A.exe";
+        let mut s = app("s", 1, Some(exe), 10, false);
+        s.system = true;
+        let g = groups("e", vec![s, app("a", 1, Some(exe), 10, false)]);
+        assert_eq!(g.len(), 2);
+        assert!(g.iter().any(|g| g.row.id == "e|system"));
+    }
+    #[test]
+    fn key_fallback_order_path_identifier_display_pid() {
+        let mut m = app("a", 5, None, 0, false);
+        m.session_id = r"{0.0.0}.{guid}|\Device\Vol3\Apps\Tool.exe%b5".into();
+        m.display = "Tool Display".into();
+        assert_eq!(app_key(&m), r"app:\device\vol3\apps\tool.exe");
+        m.session_id = String::new();
+        assert_eq!(app_key(&m), "app:name:tool display");
+        m.display = "  ".into();
+        assert_eq!(app_key(&m), "app:pid:5");
+        m.path = Some(r"C:\Apps\Real.exe".into());
+        assert_eq!(app_key(&m), r"app:c:\apps\real.exe");
+    }
+    #[test]
+    fn store_apps_on_shared_host_are_not_merged() {
+        let host = r"C:\Windows\System32\ApplicationFrameHost.exe";
+        let mut a = app("a", 1, Some(host), 10, false);
+        let mut b = app("b", 2, Some(host), 10, false);
+        a.display = "Rechner".into();
+        b.display = "Fotos".into();
+        let c = app("c", 3, Some(host), 10, false);
+        let d = app("d", 4, Some(host), 10, false);
+        let g = groups("e", vec![a, b, c, d]);
+        assert_eq!(g.len(), 4);
+    }
+
     #[test]
     fn batch_refresh_clears_removed_endpoint_after_write_error() {
         let mut current = AudioSnapshot {
