@@ -26,4 +26,4 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-[Vollständiges Setup](docs/setup.md) · [Produktumfang](NexPanel.md) · [v0.1-Entwurf](docs/superpowers/specs/2026-10-31-v01-design.md) · [Quellcode](https://github.com/jona1502/nexpanel)
+[Lizenzen](docs/licensing.md) · [Vollständiges Setup](docs/setup.md) · [Produktumfang](NexPanel.md) · [v0.1-Entwurf](docs/superpowers/specs/2026-10-31-v01-design.md) · [Quellcode](https://github.com/jona1502/nexpanel)
