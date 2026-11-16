@@ -2,6 +2,7 @@ pub mod clock;
 pub mod config;
 pub mod logging;
 pub mod platform;
+pub mod popup_state;
 pub mod services;
 pub mod settings_worker;
 pub mod time_tools;
