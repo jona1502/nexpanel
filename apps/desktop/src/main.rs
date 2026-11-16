@@ -3,7 +3,7 @@ use nexpanel::{
     config::{Accent, Config},
     platform,
     popup_state::{Action, Event, Popup, State},
-    services::{self, AudioCommand, DisplayCommand},
+    services::{self, AudioCommand, DisplayCommand, system::SystemCommand},
     settings_worker::{self, Command},
     time_input::TimeInput,
     time_tools::{Countdown, Stopwatch},
@@ -44,13 +44,37 @@ fn parse_arguments(args: &[String]) -> Result<Mode, &'static str> {
         _ => Err("Ungültige Argumente; --help zeigt die Optionen"),
     }
 }
+/// Tab indices in `main.slint` (`for label[i] in [...]`, `root.tab==N`).
+const TAB_TIMER: i32 = 2;
+const TAB_SYSTEM: i32 = 3;
+const TAB_SETTINGS: i32 = 4;
+const TAB_COUNT: usize = 5;
 fn capture_name(tab: usize) -> &'static str {
     [
         "01-displays.png",
         "02-audio.png",
         "03-zeit.png",
-        "04-einstellungen.png",
+        "04-system.png",
+        "05-einstellungen.png",
     ][tab]
+}
+fn apply_system(a: &MainWindow, s: &services::system::SystemSnapshot) {
+    let v = services::system::view(s);
+    a.set_system_status(s.status.clone().into());
+    a.set_cpu_text(v.cpu_text.into());
+    a.set_cpu_pct(v.cpu_pct);
+    a.set_cpu_level(v.cpu_level);
+    a.set_ram_text(v.ram_text.into());
+    a.set_ram_pct(v.ram_pct);
+    a.set_ram_level(v.ram_level);
+    a.set_gpu_available(v.gpu_available);
+    a.set_gpu_text(v.gpu_text.into());
+    a.set_gpu_pct(v.gpu_pct);
+    a.set_gpu_level(v.gpu_level);
+    a.set_vram_text(v.vram_text.into());
+    a.set_vram_pct(v.vram_pct);
+    a.set_vram_level(v.vram_level);
+    a.set_gpu_name(v.gpu_name.into());
 }
 /// Tick while the panel is open: text, sliders and worker snapshots must feel live.
 const FAST_TICK: Duration = Duration::from_millis(200);
@@ -122,7 +146,7 @@ fn update_timers(
         // Focus Assist can swallow the balloon without any error: the banner must be the
         // first thing the user sees when the panel is opened next (tab 2 = timer).
         if !a.window().is_visible() {
-            a.set_tab(2);
+            a.set_tab(TAB_TIMER);
         }
         if !tray::notify("NexPanel", "Timer abgelaufen") {
             platform::alarm();
@@ -297,7 +321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if mode == Mode::Help {
         println!(
-            "NexPanel 0.1\n  --background   Im Tray starten\n  --diagnostics  Display/Audio nur lesen und beenden\n  --capture-preview <Verzeichnis>  Vier echte UI-Tabs als PNG speichern, dann beenden (nur lesend)\n  --help         Hilfe"
+            "NexPanel 0.1\n  --background   Im Tray starten\n  --diagnostics  Display/Audio nur lesen und beenden\n  --capture-preview <Verzeichnis>  Fünf echte UI-Tabs als PNG speichern, dann beenden (nur lesend)\n  --help         Hilfe"
         );
         return Ok(());
     }
@@ -356,6 +380,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     let (dtx, drx, display_crashed) = services::display::spawn();
     let (atx, arx, audio_crashed) = services::audio::spawn();
+    let (ytx, yrx, system_crashed) = services::system::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
     let tick_body: TickBody = Rc::new(RefCell::new(Box::new(|| {})));
     // Persistent models: rows are updated in place so a dragged slider survives.
@@ -467,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             TrayEvent::Toggle => dispatch(&app, &popup, Event::TrayToggle, ms()),
                             TrayEvent::Open => dispatch(&app, &popup, Event::TrayOpen, ms()),
                             TrayEvent::Settings => {
-                                app.set_tab(3);
+                                app.set_tab(TAB_SETTINGS);
                                 dispatch(&app, &popup, Event::TrayOpen, ms());
                             }
                             // Before the first settings snapshot the save would be discarded
@@ -479,7 +504,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.invoke_save_settings();
                             }
                             TrayEvent::NotificationClicked => {
-                                app.set_tab(2);
+                                app.set_tab(TAB_TIMER);
                                 dispatch(&app, &popup, Event::ShowRequested, ms());
                             }
                             TrayEvent::Resumed => {
@@ -699,6 +724,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let shutdown_display = dtx.clone();
     let shutdown_audio = atx.clone();
+    let shutdown_system = ytx.clone();
     let drift = Rc::new(nexpanel::clock::DriftDetector::default());
     *timer_check.borrow_mut() = Some(Box::new({
         let (weak, c, s, d) = (
@@ -717,11 +743,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let expiry = Rc::new(slint::Timer::default());
     let tick_interval = Cell::new(Some(FAST_TICK));
     let ready = Rc::new(Cell::new((false, false)));
+    let system_ready = Rc::new(Cell::new(false));
+    let system_seen = system_ready.clone();
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
     let tick_popup = popup.clone();
     let mut visible = None;
-    let mut crash_shown = (false, false);
+    let mut crash_shown = (false, false, false);
+    let mut system_active = None;
     let tick_timer = Rc::downgrade(&tick);
     let tick_wake = Rc::downgrade(&tick_body);
     *tick_body.borrow_mut() = Box::new({
@@ -798,6 +827,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 a.set_audio_status("Audio-Dienst abgestürzt – siehe Log".into());
                 a.set_audio(ModelRc::default());
             }
+            if let Some(s) = yrx.try_iter().last() {
+                system_seen.set(true);
+                apply_system(&a, &s);
+            }
+            if !crash_shown.2 && system_crashed.load(Ordering::SeqCst) {
+                crash_shown.2 = true;
+                a.set_system_status("System-Dienst abgestürzt – siehe Log".into());
+            }
             if let Some(s) = srx.try_iter().last() {
                 apply_config(&a, &s.config);
                 a.set_settings_error(s.error.into());
@@ -834,6 +871,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 visible = Some(active);
                 let _ = dtx.send(DisplayCommand::SetActive(active));
                 let _ = atx.send(AudioCommand::SetActive(active));
+            }
+            // Sample only while the panel is visible AND the System tab is shown.
+            let want_system = active && a.get_tab() == TAB_SYSTEM;
+            if system_active != Some(want_system) {
+                system_active = Some(want_system);
+                let _ = ytx.send(SystemCommand::SetActive(want_system));
             }
             // Countdown expiry: one-shot timer at the exact deadline instead of polling.
             let delay = {
@@ -919,6 +962,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         return;
                     }
+                    // System values need the worker to be activated and prime first.
+                    if tab == TAB_SYSTEM as usize
+                        && !system_ready.get()
+                        && started.elapsed() < next_capture + Duration::from_secs(5)
+                    {
+                        return;
+                    }
                     let result = app
                         .window()
                         .take_snapshot()
@@ -930,7 +980,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return;
                     }
                     tab += 1;
-                    if tab == 4 {
+                    if tab == TAB_COUNT {
                         let _ = slint::quit_event_loop();
                     } else {
                         app.set_tab(tab as i32);
@@ -951,6 +1001,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(capture_timer);
     let _ = shutdown_display.send(DisplayCommand::Shutdown);
     let _ = shutdown_audio.send(AudioCommand::Shutdown);
+    let _ = shutdown_system.send(SystemCommand::Shutdown);
     // Display and audio workers: wait briefly so COM/DDC handles are released.
     nexpanel::logging::join_workers(Duration::from_secs(1));
     let _ = stx.send(Command::Shutdown);
@@ -1043,15 +1094,35 @@ mod tests {
         );
     }
     #[test]
-    fn captures_have_four_distinct_ordered_png_names() {
+    fn captures_have_five_distinct_ordered_png_names() {
         assert_eq!(
-            (0..4).map(capture_name).collect::<Vec<_>>(),
+            (0..TAB_COUNT).map(capture_name).collect::<Vec<_>>(),
             vec![
                 "01-displays.png",
                 "02-audio.png",
                 "03-zeit.png",
-                "04-einstellungen.png"
+                "04-system.png",
+                "05-einstellungen.png"
             ]
         );
+    }
+    #[test]
+    fn tab_constants_match_slint() {
+        let ui = include_str!("../ui/main.slint");
+        let compact: String = ui.split_whitespace().collect();
+        assert!(compact.contains(r#"["Displays","Audio","Zeit","System","Einstellungen"]"#));
+        for i in 0..TAB_COUNT {
+            assert!(compact.contains(&format!("root.tab=={i}:")), "tab {i}");
+        }
+        assert!(compact.contains(&format!(
+            "root.tab=={TAB_SYSTEM}:VerticalLayout{{spacing:6px"
+        )));
+        assert!(compact.contains(&format!(
+            "root.tab=={TAB_SETTINGS}:VerticalLayout{{spacing:12px"
+        )));
+        assert!(compact.contains(&format!(
+            "root.tab=={TAB_TIMER}:VerticalLayout{{spacing:8px"
+        )));
+        assert_eq!((TAB_TIMER, TAB_SYSTEM, TAB_SETTINGS), (2, 3, 4));
     }
 }
