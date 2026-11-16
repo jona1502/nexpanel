@@ -16,7 +16,7 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::atomic::Ordering,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 slint::include_modules!();
 #[derive(Debug, PartialEq, Eq)]
@@ -50,12 +50,33 @@ fn capture_name(tab: usize) -> &'static str {
         "04-einstellungen.png",
     ][tab]
 }
+type TimerCheck = Rc<RefCell<Option<Box<dyn Fn()>>>>;
+/// Monotonic ms including standby (see `nexpanel::clock`); wall-clock jumps do not affect timers.
 fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u64::MAX as u128) as u64
+    nexpanel::clock::mono_ms()
+}
+/// Polls expiry and refreshes the timer texts. Notifies (balloon, never a focus-stealing
+/// panel) exactly once per expiry: `Countdown::poll_expired` latches.
+fn update_timers(
+    a: &MainWindow,
+    countdown: &RefCell<Countdown>,
+    stopwatch: &RefCell<Stopwatch>,
+    drift: &nexpanel::clock::DriftDetector,
+) {
+    drift.check();
+    let t = now();
+    let mut c = countdown.borrow_mut();
+    if c.poll_expired(t) {
+        a.set_expired(true);
+        if !tray::notify("NexPanel", "Timer abgelaufen") {
+            platform::alarm();
+        }
+    }
+    a.set_countdown_text(clock(c.remaining_ms(t).saturating_add(999)));
+    a.set_countdown_running(c.is_running());
+    let s = stopwatch.borrow();
+    a.set_stopwatch_text(clock(s.elapsed_ms(t)));
+    a.set_stopwatch_running(s.is_running());
 }
 fn clock(ms: u64) -> slint::SharedString {
     let s = ms / 1000;
@@ -238,11 +259,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    // Filled once the timers exist; lets the tray trigger an immediate check after resume.
+    let timer_check: TimerCheck = Rc::default();
     let tray = if capture_mode {
         None
     } else {
         Some(tray::TrayHost::new(Box::new({
             let weak = app.as_weak();
+            let timer_check = timer_check.clone();
             move |event| {
                 let Some(app) = weak.upgrade() else {
                     return;
@@ -260,6 +284,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     TrayEvent::Open => show(&app),
+                    TrayEvent::NotificationClicked => {
+                        app.set_tab(2);
+                        show(&app);
+                    }
+                    TrayEvent::Resumed => {
+                        if let Some(check) = timer_check.borrow().as_ref() {
+                            check();
+                        }
+                    }
                     TrayEvent::Quit => {
                         let _ = slint::quit_event_loop();
                     }
@@ -402,6 +435,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let shutdown_display = dtx.clone();
     let shutdown_audio = atx.clone();
+    let drift = Rc::new(nexpanel::clock::DriftDetector::default());
+    *timer_check.borrow_mut() = Some(Box::new({
+        let (weak, c, s, d) = (
+            app.as_weak(),
+            countdown.clone(),
+            stopwatch.clone(),
+            drift.clone(),
+        );
+        move || {
+            if let Some(a) = weak.upgrade() {
+                update_timers(&a, &c, &s, &d);
+            }
+        }
+    }));
     let tick = slint::Timer::default();
     let ready = Rc::new(Cell::new((false, false)));
     let snapshot_ready = ready.clone();
@@ -475,19 +522,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if instance.as_ref().is_some_and(|i| i.open_requested()) {
                 show(&a);
             }
-            let t = now();
-            let mut c = countdown.borrow_mut();
-            if c.poll_expired(t) {
-                a.set_expired(true);
-                a.set_tab(2);
-                show(&a);
-                platform::alarm();
-            }
-            a.set_countdown_text(clock(c.remaining_ms(t).saturating_add(999)));
-            a.set_countdown_running(c.is_running());
-            let s = stopwatch.borrow();
-            a.set_stopwatch_text(clock(s.elapsed_ms(t)));
-            a.set_stopwatch_running(s.is_running());
+            update_timers(&a, &countdown, &stopwatch, &drift);
             let active = a.window().is_visible();
             if visible != Some(active) {
                 visible = Some(active);
