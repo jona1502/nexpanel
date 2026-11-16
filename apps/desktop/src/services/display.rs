@@ -231,6 +231,59 @@ fn run(rx: Receiver<DisplayCommand>, out: Sender<DisplaySnapshot>) {
         }
     }
 }
+/// Result of a successful DDC/CI brightness probe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Probe {
+    /// `GetMonitorBrightness` (high-level API) answered with a usable range.
+    High { min: u32, current: u32, max: u32 },
+    /// Only the raw VCP 0x10 read answered; range is `0..=max`.
+    Vcp { current: u32, max: u32 },
+}
+/// Probe order: high-level first, VCP 0x10 only when the high-level result is missing or has no
+/// range. Deliberately independent of `GetMonitorCapabilities` flags: many monitors omit
+/// `MC_CAPS_BRIGHTNESS` although brightness works.
+pub(crate) fn choose_probe(
+    high: Option<(u32, u32, u32)>,
+    vcp: impl FnOnce() -> Option<(u32, u32)>,
+) -> Option<Probe> {
+    if let Some((min, current, max)) = high.filter(|(min, _, max)| max > min) {
+        return Some(Probe::High { min, current, max });
+    }
+    vcp()
+        .filter(|(_, max)| *max > 0)
+        .map(|(current, max)| Probe::Vcp { current, max })
+}
+/// Runs `f` up to `attempts` times (transient DDC/CI failures right after wake or hotplug).
+pub(crate) fn retry<T>(
+    attempts: u32,
+    mut pause: impl FnMut(),
+    mut f: impl FnMut() -> Option<T>,
+) -> Option<T> {
+    for i in 0..attempts {
+        if i > 0 {
+            pause();
+        }
+        if let Some(v) = f() {
+            return Some(v);
+        }
+    }
+    None
+}
+/// Row status for a probe result.
+pub(crate) fn probe_status(probe: Option<Probe>) -> &'static str {
+    match probe {
+        Some(_) => "DDC/CI",
+        None => "DDC/CI: Monitor antwortet nicht (VCP 0x10)",
+    }
+}
+/// High-level write first; on failure the raw VCP write. `vcp_only` skips the high-level call.
+pub(crate) fn write_with_fallback(
+    vcp_only: bool,
+    high: impl FnOnce() -> bool,
+    vcp: impl FnOnce() -> bool,
+) -> bool {
+    (!vcp_only && high()) || vcp()
+}
 #[cfg(windows)]
 mod native {
     use super::*;
@@ -258,11 +311,56 @@ mod native {
             handle: Physical,
             min: u32,
             max: u32,
+            /// Only VCP 0x10 answers; the high-level brightness API is not used.
+            vcp_only: bool,
         },
         Wmi {
             path: String,
             levels: Vec<u8>,
         },
+    }
+    /// Attempts per monitor; with `PROBE_PAUSE` at most ~0.3 s of waiting.
+    const PROBE_ATTEMPTS: u32 = 3;
+    const PROBE_PAUSE: Duration = Duration::from_millis(150);
+    fn read_high(handle: &Physical) -> Option<(u32, u32, u32)> {
+        let (mut min, mut cur, mut max) = (0, 0, 0);
+        // SAFETY: valid handle and out pointers.
+        (unsafe { GetMonitorBrightness(handle.0, &mut min, &mut cur, &mut max) } != 0)
+            .then_some((min, cur, max))
+    }
+    fn read_vcp(handle: &Physical) -> Option<(u32, u32)> {
+        let (mut cur, mut max) = (0, 0);
+        // SAFETY: valid handle and out pointers.
+        (unsafe { GetVCPFeatureAndVCPFeatureReply(handle.0, 0x10, None, &mut cur, Some(&mut max)) }
+            != 0)
+            .then_some((cur, max))
+    }
+    fn probe_monitor(name: &str, handle: &Physical) -> Option<Probe> {
+        // GetMonitorCapabilities is deliberately not called: it fails on monitors that do answer
+        // brightness and costs 2-5 s per monitor.
+        let high = read_high(handle);
+        log::debug!(
+            "DDC {name}: GetMonitorBrightness {high:?} err={:?}",
+            unsafe { GetLastError() }
+        );
+        let probe = choose_probe(high, || {
+            let v = read_vcp(handle);
+            log::debug!("DDC {name}: VCP 0x10 {v:?} err={:?}", unsafe {
+                GetLastError()
+            });
+            v
+        });
+        log::debug!("DDC {name}: Probe {probe:?}");
+        probe
+    }
+    fn write_ddc(handle: &Physical, min: u32, max: u32, vcp_only: bool, value: u8) -> bool {
+        let native = native_value(min, max, value);
+        write_with_fallback(
+            vcp_only,
+            // SAFETY: valid handle.
+            || unsafe { SetMonitorBrightness(handle.0, native) } != 0,
+            || unsafe { SetVCPFeature(handle.0, 0x10, native) } != 0,
+        )
     }
     struct Target {
         id: String,
@@ -462,10 +560,13 @@ mod native {
                 } else if let Some((_, h)) = logical.iter().find(|(s, _)| s == &t.source) {
                     unsafe {
                         let mut n = 0;
-                        if GetNumberOfPhysicalMonitorsFromHMONITOR(*h, &mut n).is_ok()
-                            && n <= 64
-                            && n > 0
-                        {
+                        let count = GetNumberOfPhysicalMonitorsFromHMONITOR(*h, &mut n);
+                        log::debug!(
+                            "DDC {}: Quelle '{}' gefunden, physische Monitore: {n} ({count:?})",
+                            t.name,
+                            t.source
+                        );
+                        if count.is_ok() && n <= 64 && n > 0 {
                             let mut ps = vec![PHYSICAL_MONITOR::default(); n as usize];
                             if GetPhysicalMonitorsFromHMONITOR(*h, &mut ps).is_ok() {
                                 let handles: Vec<Physical> = ps
@@ -474,23 +575,28 @@ mod native {
                                     .collect();
                                 if handles.len() == 1 {
                                     let handle = handles.into_iter().next().unwrap();
-                                    let (mut caps, mut temp, mut min, mut current, mut max) =
-                                        (0, 0, 0, 0, 0);
-                                    if GetMonitorCapabilities(handle.0, &mut caps, &mut temp) != 0
-                                        && caps & 2 != 0
-                                        && GetMonitorBrightness(
-                                            handle.0,
-                                            &mut min,
-                                            &mut current,
-                                            &mut max,
-                                        ) != 0
-                                        && max > min
-                                    {
+                                    let probe = retry(
+                                        PROBE_ATTEMPTS,
+                                        || std::thread::sleep(PROBE_PAUSE),
+                                        || probe_monitor(&t.name, &handle),
+                                    );
+                                    row.status = probe_status(probe).into();
+                                    if let Some(p) = probe {
+                                        let (min, current, max, vcp_only) = match p {
+                                            Probe::High { min, current, max } => {
+                                                (min, current, max, false)
+                                            }
+                                            Probe::Vcp { current, max } => (0, current, max, true),
+                                        };
                                         row.brightness = Some(percentage(min, max, current));
-                                        row.status = "DDC/CI".into();
                                         self.controls.insert(
                                             t.id.clone(),
-                                            Control::Ddc { handle, min, max },
+                                            Control::Ddc {
+                                                handle,
+                                                min,
+                                                max,
+                                                vcp_only,
+                                            },
                                         );
                                     }
                                 } else {
@@ -502,6 +608,13 @@ mod native {
                         }
                     }
                 }
+                log::debug!(
+                    "DDC {}: Quelle '{}' in EnumDisplayMonitors: {}; Status '{}'",
+                    t.name,
+                    t.source,
+                    logical.iter().any(|(s, _)| s == &t.source),
+                    row.status
+                );
                 self.snapshot.devices.push(row);
             }
             if let Some(w) = &self.wmi {
@@ -584,14 +697,28 @@ mod native {
             }
             self.last_read = Instant::now();
             for row in &mut self.snapshot.devices {
-                if let Some(Control::Ddc { handle, min, max }) = self.controls.get_mut(&row.id) {
-                    let mut current = 0;
-                    unsafe {
-                        if GetMonitorBrightness(handle.0, min, &mut current, max) != 0
-                            && *max > *min
-                        {
-                            row.brightness = Some(percentage(*min, *max, current));
-                        } else {
+                if let Some(Control::Ddc {
+                    handle,
+                    min,
+                    max,
+                    vcp_only,
+                }) = self.controls.get_mut(&row.id)
+                {
+                    let high = if *vcp_only { None } else { read_high(handle) };
+                    match choose_probe(high, || read_vcp(handle)) {
+                        Some(Probe::High {
+                            min: mn,
+                            current,
+                            max: mx,
+                        }) => {
+                            (*min, *max) = (mn, mx);
+                            row.brightness = Some(percentage(mn, mx, current));
+                        }
+                        Some(Probe::Vcp { current, max: mx }) => {
+                            (*min, *max) = (0, mx);
+                            row.brightness = Some(percentage(0, mx, current));
+                        }
+                        None => {
                             row.brightness = None;
                             row.status =
                                 "Helligkeit konnte nicht gelesen werden; bitte aktualisieren"
@@ -633,16 +760,21 @@ mod native {
         }
         pub fn write(&mut self, id: &str, value: u8) -> Result<(), String> {
             let result = match self.controls.get(id) {
-                Some(Control::Ddc { handle, min, max }) => unsafe {
-                    if SetMonitorBrightness(handle.0, native_value(*min, *max, value)) != 0 {
+                Some(Control::Ddc {
+                    handle,
+                    min,
+                    max,
+                    vcp_only,
+                }) => {
+                    if write_ddc(handle, *min, *max, *vcp_only, value) {
                         Ok(value)
                     } else {
                         Err(format!(
                             "Helligkeit konnte nicht gesetzt werden: {:?}",
-                            GetLastError()
+                            unsafe { GetLastError() }
                         ))
                     }
-                },
+                }
                 Some(Control::Wmi { path, levels }) => (|| {
                     let v = levels
                         .iter()
@@ -808,6 +940,77 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn probe_prefers_high_level_without_touching_vcp() {
+        let p = choose_probe(Some((0, 50, 100)), || panic!("vcp must not be read"));
+        assert_eq!(
+            p,
+            Some(Probe::High {
+                min: 0,
+                current: 50,
+                max: 100
+            })
+        );
+    }
+    #[test]
+    fn probe_falls_back_to_vcp_when_high_level_fails_or_has_no_range() {
+        let vcp = Some(Probe::Vcp {
+            current: 60,
+            max: 100,
+        });
+        assert_eq!(choose_probe(None, || Some((60, 100))), vcp);
+        assert_eq!(choose_probe(Some((0, 60, 0)), || Some((60, 100))), vcp);
+    }
+    #[test]
+    fn probe_fails_when_nothing_usable_answers() {
+        assert_eq!(choose_probe(None, || None), None);
+        assert_eq!(choose_probe(None, || Some((5, 0))), None);
+    }
+    #[test]
+    fn retry_stops_at_first_success_and_gives_up_after_attempts() {
+        let (mut calls, mut pauses) = (0, 0);
+        let r = retry(
+            3,
+            || pauses += 1,
+            || {
+                calls += 1;
+                (calls == 2).then_some(calls)
+            },
+        );
+        assert_eq!((r, calls, pauses), (Some(2), 2, 1));
+        let (mut calls, mut pauses) = (0, 0);
+        let r: Option<()> = retry(
+            3,
+            || pauses += 1,
+            || {
+                calls += 1;
+                None
+            },
+        );
+        assert_eq!((r, calls, pauses), (None, 3, 2));
+    }
+    #[test]
+    fn status_text_names_the_reason() {
+        assert_eq!(
+            probe_status(Some(Probe::Vcp { current: 1, max: 2 })),
+            "DDC/CI"
+        );
+        assert_eq!(
+            probe_status(None),
+            "DDC/CI: Monitor antwortet nicht (VCP 0x10)"
+        );
+    }
+    #[test]
+    fn write_falls_back_to_vcp_and_vcp_only_skips_high_level() {
+        assert!(write_with_fallback(
+            false,
+            || true,
+            || panic!("no fallback")
+        ));
+        assert!(write_with_fallback(false, || false, || true));
+        assert!(!write_with_fallback(false, || false, || false));
+        assert!(write_with_fallback(true, || panic!("skipped"), || true));
+    }
     #[test]
     fn failed_commands_back_off_without_pushing_deadline() {
         let t0 = Instant::now();
