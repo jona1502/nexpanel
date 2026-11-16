@@ -1,5 +1,6 @@
 import { AboutCard } from "about.slint";
-import { Button, Slider, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
+import { VolumeSlider } from "volume_slider.slint";
+import { Button, ScrollView, CheckBox, SpinBox, ComboBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool }
 component Heading inherits Text { color:#f1f3fa; font-size:20px; font-weight:600; }
@@ -54,7 +55,7 @@ export component MainWindow inherits Window {
  if root.displays.length==0: Card {min-height:96px;Text{text:"Keine Monitore verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
  for row in root.displays: Card {VerticalLayout {padding:14px;spacing:8px;
  HorizontalLayout {Text{text:row.name;color:#eef0f7;font-weight:600;horizontal-stretch:1;}Text{text:row.supported?row.value+" %":"—";color:root.accent;}}
- Slider {minimum:0;maximum:100;value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
+ VolumeSlider {value:row.value;enabled:row.supported;changed(value)=>{root.brightness(row.id,round(value));}}
  Hint{text:row.status;}
  }}
  CheckBox{enabled:root.settings-ready;text:"Unterstützte Displays koppeln";checked:root.linked;toggled=>{root.linked=self.checked;root.save-settings();}}
@@ -67,7 +68,7 @@ export component MainWindow inherits Window {
  if root.audio.length==0: Card {min-height:96px;Text{text:"Kein Audiogerät verfügbar";color:#bbc1d0;horizontal-alignment:center;vertical-alignment:center;}}
  for row in root.audio: Card {VerticalLayout {padding:14px;spacing:8px;
  HorizontalLayout {Text{text:row.name;color:#eef0f7;font-weight:600;horizontal-stretch:1;}Text{text:row.value+" %";color:root.accent;}}
- Slider{minimum:0;maximum:100;value:row.value;changed(value)=>{root.volume(row.id,round(value));}}
+ VolumeSlider{value:row.value;changed(value)=>{root.volume(row.id,round(value));}}
  CheckBox{text:"Stumm";checked:row.muted;toggled=>{root.mute(row.id,self.checked);}}
  }}
  }
