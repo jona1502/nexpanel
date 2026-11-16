@@ -185,7 +185,7 @@ Panel ist 392 x 440 px (vorher 400 x 620). Vorschau ohne Hardwarezugriff: `nexpa
 
 ## Manuell: System-Tab (feat/system-monitor)
 
-Vorschau: `nexpanel.exe --capture-preview <Ordner>` speichert jetzt fünf Tabs (`04-system.png` ist der System-Tab). Reihenfolge der Tabs: Displays, Audio, Zeit, System, Einstellungen.
+Vorschau: `nexpanel.exe --capture-preview <Ordner>` speichert fünf Tabs (`03-system.png` ist der System-Tab). Reihenfolge der Tabs: Audio, Display, System, Zeit, Einstellungen.
 
 | Prüfung | Erwartung |
 | --- | --- |
@@ -199,7 +199,7 @@ Vorschau: `nexpanel.exe --capture-preview <Ordner>` speichert jetzt fünf Tabs (
 | Aktiver System-Tab | Höchstens ein Wakeup pro Sekunde, CPU des Threads unter 0,5 % |
 | Notebook mit iGPU + dGPU | Kopfzeile zeigt die ausgelastetere GPU; bei Gleichstand die mit mehr VRAM; kein Flackern bei Last auf einer GPU |
 | VM / alter Treiber ohne GPU-Zähler | „GPU: nicht verfügbar“ gedimmt, CPU und RAM laufen weiter, keine Fehlermeldung, Warnung im Log |
-| Timer-Benachrichtigung anklicken | Öffnet Tab „Zeit“ (Index 2); Tray-Menü „Einstellungen“ öffnet Tab 4 |
+| Timer-Benachrichtigung anklicken | Öffnet Tab „Zeit“ (Index 3); Tray-Menü „Einstellungen“ öffnet Tab 4 |
 | Lange laufen lassen (> 1 min mit GPU-Last wechselnder Prozesse) | Werte bleiben plausibel (PDH-Neuaufbau alle 10 Messungen), kein Speicher- oder Handle-Wachstum |
 
 ## Feste Panelgröße (fix/audio-collapse-resize)
@@ -207,3 +207,19 @@ Vorschau: `nexpanel.exe --capture-preview <Ordner>` speichert jetzt fünf Tabs (
 | Aktion | Erwartung |
 |---|---|
 | Alle Tabs nacheinander öffnen | Audio-Tab hat keine Einklapp-Funktion; Panelgröße bleibt in allen Tabs 392×440 |
+
+## Manuell: Tab-Reihenfolge und letzter Tab (feat/tab-order-and-memory)
+
+Reihenfolge: Audio 0, Display 1, System 2, Zeit 3, Einstellungen 4. Das Panel zeigt den Tab, der beim letzten Schließen offen war (im Speicher und als `last_tab` in `settings.json`, gespeichert beim Verbergen und beim Beenden, nur wenn geändert). Ausnahmen für eine Öffnung: Timer-Ablauf bei verborgenem Panel und Klick auf die Benachrichtigung wählen Zeit, Tray-Menü „Einstellungen“ wählt Einstellungen; dieser Tab wird beim Schließen wieder gemerkt.
+
+| Prüfung | Erwartung |
+| --- | --- |
+| Tab-Leiste | Audio, Displays, System, Zeit, Einstellungen (von links) |
+| Tab System öffnen, Panel schließen, wieder öffnen | System ist offen |
+| Tab Zeit öffnen, App über Tray beenden, neu starten, Panel öffnen | Zeit ist offen; `last_tab` in `%LOCALAPPDATA%\NexPanel\settings.json` ist 3 |
+| Tab wechseln und mehrfach klicken ohne zu schließen | Keine Schreibzugriffe auf settings.json (nur beim Verbergen/Beenden) |
+| `last_tab` auf 9 oder -1 setzen, App starten | Audio ist offen, keine Fehlermeldung |
+| Datei beschädigt (kein JSON) | Hinweis wie bisher, Speichern gesperrt, Datei bleibt unverändert, Tab wird nicht geschrieben |
+| Timer ablaufen lassen bei verborgenem Panel, Panel öffnen | Zeit mit Banner; nach Schließen und Öffnen bleibt Zeit |
+| Tray-Menü „Einstellungen“ | Einstellungen öffnet, auch wenn zuletzt ein anderer Tab offen war; danach gemerkt |
+| System-Tab, Panel verbergen | Messung stoppt wie zuvor (Gating auf Tab-Index System = 2) |

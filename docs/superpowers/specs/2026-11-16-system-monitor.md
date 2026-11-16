@@ -33,7 +33,7 @@ PDH-Query und Handles werden beim Deaktivieren/Drop geschlossen. Kein COM nötig
 Zeilen `Label | dünner Balken (3 px) | Wert` im kompakten Audio-Stil. Balken: Spur #343640, Füllung
 Akzent, ab 80 % bernstein, ab 95 % rot. GPU-Name als 11-px-Zeile in Grau über der GPU-Zeile.
 Aktualisierung über den vorhandenen Tick (200 ms sichtbar), kein neuer Timer.
-Tab-Reihenfolge: Displays 0, Audio 1, Zeit 2, System 3, Einstellungen 4 (Konstanten + Test).
+Tab-Reihenfolge (seit feat/tab-order-and-memory): Audio 0, Display 1, System 2, Zeit 3, Einstellungen 4 (Konstanten + Test).
 
 ## Fehler / nicht unterstützt
 PDH-GPU-Zähler fehlen (VM, alter Treiber): „GPU: nicht verfügbar“ gedimmt, `log::warn!`, kein Dialog.
