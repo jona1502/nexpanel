@@ -1,0 +1,43 @@
+// Thin slider: 2px track, 10px round thumb. `value` is 0..100; the shown value follows the
+// pointer while dragging and the bound value otherwise (so model updates keep flowing in).
+export component VolumeSlider inherits Rectangle {
+ in property<float> value;
+ in property<bool> dimmed:false;
+ in property<bool> enabled:true;
+ callback changed(float);
+ callback released();
+ min-height:20px;
+ property<length> thumb:10px;
+ property<bool> dragging:false;
+ property<float> drag-value:0;
+ property<float> shown:root.dragging?root.drag-value:root.value;
+ pure function to-value(x:length) -> float { max(0, min(100, (x - root.thumb/2) / (root.width - root.thumb) * 100)) }
+ Rectangle {
+  x:0px; y:(root.height - 2px)/2; width:root.width; height:2px; border-radius:1px; background:#5a5d68;
+  opacity:(root.dimmed||!root.enabled)?0.5:1;
+ }
+ Rectangle {
+  x:(root.width - root.thumb)*root.shown/100; y:(root.height - root.thumb)/2; width:root.thumb; height:root.thumb; border-radius:root.thumb/2;
+  background:#e6e7ee; opacity:(root.dimmed||!root.enabled)?0.5:1;
+ }
+ ta := TouchArea {
+  enabled:root.enabled;
+  pointer-event(e) => {
+   if e.button != PointerEventButton.left { return; }
+   if e.kind == PointerEventKind.down {
+    root.dragging = true;
+    root.drag-value = root.to-value(self.mouse-x);
+    root.changed(root.drag-value);
+   } else if e.kind == PointerEventKind.up && root.dragging {
+    root.dragging = false;
+    root.released();
+   }
+  }
+  moved => {
+   if root.dragging {
+    root.drag-value = root.to-value(self.mouse-x);
+    root.changed(root.drag-value);
+   }
+  }
+ }
+}
