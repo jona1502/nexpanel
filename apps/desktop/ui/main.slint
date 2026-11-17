@@ -304,7 +304,7 @@ export component MainWindow inherits Window {
  }}
  Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
  Button{text:"Einstellungen zurücksetzen";enabled:root.settings-ready;clicked=>{root.reset-settings();}}
- Hint{text:"NexPanel 0.1 · Windows 11\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
+ Hint{text:@tr("NexPanel {} · Windows 11", root.app-version)+"\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
  }
  }
  }
