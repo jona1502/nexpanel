@@ -7,7 +7,7 @@ import { Button, ScrollView, CheckBox, SpinBox, Palette } from "std-widgets.slin
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool, peak:int, peak-color:color }
 component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
-component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
+component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; height:self.preferred-height; }
 component Card inherits Rectangle { background:#252832; border-radius:8px; }
 // Label | 3px bar | value. level: 0 accent, 1 amber (>=80 %), 2 red (>=95 %).
 component StatRow inherits Rectangle {
@@ -289,8 +289,8 @@ export component MainWindow inherits Window {
  }}
  Card{VerticalLayout{padding:14px;spacing:10px;
  Hint{text:@tr("UPDATES");}
- Text{text:@tr("Installierte Version: {}", root.app-version);color:#f3f4f8;font-size:13px;wrap:word-wrap;}
- Text{text:root.update-status-text;color:root.update-state==8?#ffbc91:#b6bdcc;font-size:12px;wrap:word-wrap;}
+ Text{text:@tr("Installierte Version: {}", root.app-version);color:#f3f4f8;font-size:13px;wrap:word-wrap;height:self.preferred-height;}
+ Text{text:root.update-status-text;color:root.update-state==8?#ffbc91:#b6bdcc;font-size:12px;wrap:word-wrap;height:self.preferred-height;}
  if root.update-state==3&&!root.update-managed: Hint{text:@tr("Diese Installation wurde nicht mit install.ps1 eingerichtet; bitte das Paket manuell installieren.");font-size:11px;}
  if root.update-state==8&&root.update-error-detail!="": Hint{text:root.update-error-detail;font-size:11px;}
  if root.update-state==4: Rectangle{height:6px;border-radius:3px;background:#343640;
