@@ -3,12 +3,16 @@
 // compiler's const propagation (`is-open`), so the list is drawn by the window itself
 // (`DropdownList`, placed last in the window so it overlays everything).
 
+import { ScrollView } from "std-widgets.slint";
+
 // The closed field. Parent owns `open` and shows a `DropdownList` when it is true.
 export component Dropdown inherits Rectangle {
     in property <[string]> model;
     in property <int> current-index: 0;
     in property <bool> enabled: true;
     in property <bool> open: false;
+    // Optional color dot per entry (empty = no dots).
+    in property <[color]> dots;
     // Absolute window position and width of the field, so the parent can place the list.
     callback toggled(length, length, length);
 
@@ -20,9 +24,17 @@ export component Dropdown inherits Rectangle {
     border-color: !root.enabled ? #2b2e39 : root.open || head.has-hover ? #809cff : #343640;
     opacity: root.enabled ? 1 : 0.5;
 
-    Text {
+    if root.current-index >= 0 && root.current-index < root.dots.length: Rectangle {
         x: 12px;
-        width: parent.width - 36px;
+        y: (parent.height - 12px) / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
+        background: root.dots[root.current-index];
+    }
+    Text {
+        x: root.dots.length > 0 ? 32px : 12px;
+        width: parent.width - self.x - 24px;
         text: root.model[root.current-index];
         color: #f3f4f8;
         font-family: "Segoe UI";
@@ -57,6 +69,9 @@ export component Dropdown inherits Rectangle {
 export component DropdownList inherits Rectangle {
     in property <[string]> model;
     in property <int> current-index: 0;
+    in property <[color]> dots;
+    // Longer lists scroll inside this height.
+    in property <length> max-list-height: 240px;
     in property <length> list-x;
     in property <length> list-y;
     in property <length> list-width;
@@ -65,6 +80,20 @@ export component DropdownList inherits Rectangle {
     callback dismissed();
 
     property <int> highlight: root.current-index;
+    // Scrolls the list so row `i` is fully visible (keyboard navigation).
+    function reveal(i: int) {
+        if i * 32px < -sv.content-y {
+            sv.content-y = -i * 32px;
+        } else if (i + 1) * 32px > -sv.content-y + sv.height {
+            sv.content-y = sv.height - (i + 1) * 32px;
+        }
+    }
+    changed highlight => {
+        root.reveal(root.highlight);
+    }
+    init => {
+        root.reveal(root.current-index);
+    }
 
     x: 0px;
     y: 0px;
@@ -99,32 +128,46 @@ export component DropdownList inherits Rectangle {
         // Clamp so the list never leaves the window (flips up when it would not fit).
         y: root.list-y + self.height > root.height ? max(4px, root.list-y - 4px - 36px - self.height - 4px) : root.list-y;
         width: root.list-width;
-        height: root.model.length * 32px + 8px;
+        height: min(root.model.length * 32px + 8px, root.max-list-height, root.height - 8px);
         background: #252832;
         border-radius: 8px;
         border-width: 1px;
         border-color: #343640;
         // Swallow clicks so they do not reach the catcher below.
         TouchArea { }
-        VerticalLayout {
-            padding: 4px;
-            for item[i] in root.model: Rectangle {
-                height: 32px;
-                border-radius: 6px;
-                background: i == root.highlight || row.has-hover ? #323646 : transparent;
-                Text {
-                    x: 8px;
-                    width: parent.width - 16px;
-                    text: item;
-                    color: i == root.current-index ? #809cff : #f3f4f8;
-                    font-family: "Segoe UI";
-                    font-size: 13px;
-                    vertical-alignment: center;
-                }
-                row := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.chosen(i);
+        sv := ScrollView {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            VerticalLayout {
+                for item[i] in root.model: Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: i == root.highlight || row.has-hover ? #323646 : transparent;
+                    if i < root.dots.length: Rectangle {
+                        x: 8px;
+                        y: (parent.height - 12px) / 2;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 6px;
+                        background: root.dots[i];
+                    }
+                    Text {
+                        x: root.dots.length > 0 ? 28px : 8px;
+                        width: parent.width - self.x - 8px;
+                        text: item;
+                        color: i == root.current-index ? #809cff : #f3f4f8;
+                        font-family: "Segoe UI";
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    row := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.chosen(i);
+                        }
                     }
                 }
             }

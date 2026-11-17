@@ -1,3 +1,4 @@
+pub mod accent;
 pub mod clock;
 pub mod config;
 pub mod hotkey;

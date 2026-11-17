@@ -92,6 +92,10 @@ export component MainWindow inherits Window {
  in property<bool> settings-ready:false;
  in property<bool> settings-blocked:false;
  in-out property<int> accent-index:0;
+ // Custom accent: text field content, whether it parses (empty counts as fine), last accepted `#rrggbb`
+ // and whether the accepted color had to be lightened to stay readable.
+ in-out property<string> custom-hex; in-out property<bool> custom-hex-valid:true; in-out property<string> custom-hex-saved; in property<bool> custom-adjusted:false;
+ callback custom-hex-edited(string);
  in-out property<bool> animations:true;
  in-out property<bool> focus-close:true;
  in-out property<bool> linked:false;
@@ -110,7 +114,9 @@ export component MainWindow inherits Window {
  in-out property<bool> dropdown-open:false;
  // Tooltip state; `HoverTip` at the end of the window draws it.
  property<string> tip-text; property<length> tip-x; property<length> tip-y; property<length> tip-h; in-out property<bool> tip-visible:false;
- property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
+ property<[string]> accent-names:[@tr("Blau"),@tr("Violett"),@tr("Grün"),@tr("Orange"),@tr("Rot"),@tr("Rosa"),@tr("Magenta"),@tr("Türkis"),@tr("Cyan"),@tr("Gelb"),@tr("Limette"),@tr("Mint"),@tr("Koralle"),@tr("Silber"),@tr("Indigo"),@tr("Sand"),@tr("Eigene …")];
+ // One color per accent-names entry (last = custom color); set by Rust, readability already ensured there.
+ in property<[color]> accent-dots;
  property<[string]> hotkey-names:["Alt+Leertaste","Strg+Alt+Leertaste","Win+Alt+Leertaste"];
  property<[string]> position-names:["Mitte","Oben"];
  property<string> update-error-text:
@@ -151,7 +157,7 @@ export component MainWindow inherits Window {
  in property<bool> countdown-active:false;
  in-out property<int> time-seg:2;
  in property<string> input-h:"00"; in property<string> input-m:"05"; in property<string> input-s:"00";
- out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#809cff;
+ out property<color> accent:root.accent-index>=0&&root.accent-index<root.accent-dots.length?root.accent-dots[root.accent-index]:#809cff;
  function show-tip(t:string,x:length,y:length,h:length,s:bool){root.tip-text=t;root.tip-x=x;root.tip-y=y;root.tip-h=h;root.tip-visible=s;}
  changed tab => { root.tip-visible=false; root.scroll-y=0px; }
  callback hide-panel(); callback refresh-display(); callback refresh-audio();
@@ -280,7 +286,18 @@ export component MainWindow inherits Window {
  if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"AKZENTFARBE";}
- Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.accent-names;dots:root.accent-dots;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
+ if root.accent-index==16: VerticalLayout{spacing:4px;
+  HorizontalLayout{spacing:8px;height:36px;
+   Rectangle{width:36px;border-radius:8px;background:root.accent-dots[16];border-width:1px;border-color:#343640;}
+   Rectangle{horizontal-stretch:1;border-radius:8px;background:#1b1d25;border-width:1px;border-color:!root.custom-hex-valid?#ff6b6b:hexinput.has-focus?#809cff:#343640;
+    if root.custom-hex=="": Text{x:12px;text:@tr("#RRGGBB");color:#6f768a;font-size:13px;vertical-alignment:center;}
+    hexinput := TextInput{x:12px;width:parent.width - 24px;text<=>root.custom-hex;color:#f3f4f8;font-size:13px;single-line:true;vertical-alignment:center;enabled:root.settings-ready;selection-background-color:root.accent;selection-foreground-color:#14161c;edited=>{root.custom-hex-edited(self.text);}}
+   }
+  }
+  if !root.custom-hex-valid: Hint{text:@tr("Ungültig: erwartet #RRGGBB oder #RGB.");color:#ff9a9a;font-size:11px;}
+  if root.custom-hex-valid&&root.custom-adjusted: Hint{text:@tr("Zu dunkel, wird für die Lesbarkeit aufgehellt.");font-size:11px;}
+ }
  CheckBox{text:"Animationen";checked:root.animations;enabled:root.settings-ready;toggled=>{root.animations=self.checked;root.save-settings();}}
  CheckBox{text:"Bei Fokusverlust ausblenden";checked:root.focus-close;enabled:root.settings-ready;toggled=>{root.focus-close=self.checked;root.save-settings();}}
  CheckBox{text:"Displayhelligkeit koppeln";checked:root.linked;enabled:root.settings-ready;toggled=>{root.linked=self.checked;root.save-settings();}}
@@ -315,7 +332,7 @@ export component MainWindow inherits Window {
  }
  }
  }
- if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-live-y;list-width:root.dd-w;
+ if root.dropdown-open: DropdownList{dots:root.dropdown-kind==0?root.accent-dots:[];model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-live-y;list-width:root.dd-w;
   chosen(i)=>{
    if root.dropdown-kind==1 { root.hotkey-index=i; } else if root.dropdown-kind==2 { root.position-index=i; } else { root.accent-index=i; }
    root.dropdown-open=false;root.save-settings();}

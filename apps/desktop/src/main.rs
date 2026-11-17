@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use nexpanel::{
+    accent,
     config::{Accent, Config, SearchHotkey, SearchPosition},
     hotkey::{Hotkey, HotkeyManager, HotkeyStatus, SystemHotkey},
     meter,
@@ -313,12 +314,8 @@ fn dispatch(app: &MainWindow, popup: &RefCell<Popup>, event: Event, ms: u64) {
 }
 fn config_from(app: &MainWindow) -> Config {
     Config {
-        accent: match app.get_accent_index() {
-            1 => Accent::Purple,
-            2 => Accent::Green,
-            3 => Accent::Orange,
-            _ => Accent::Blue,
-        },
+        accent: Accent::from_index(app.get_accent_index()),
+        accent_custom: Some(app.get_custom_hex_saved().to_string()).filter(|h| !h.is_empty()),
         animations: app.get_animations(),
         close_on_focus_loss: app.get_focus_close(),
         linked_displays: app.get_linked(),
@@ -331,13 +328,30 @@ fn config_from(app: &MainWindow) -> Config {
             .unwrap_or(0),
     }
 }
+/// Colors for the accent dropdown: presets plus the custom entry (default blue while unset).
+fn accent_dots(custom: Option<&str>) -> Vec<slint::Color> {
+    let custom = custom.and_then(accent::parse_hex);
+    Accent::ALL
+        .iter()
+        .map(|a| {
+            let rgb = a.rgb().or(custom).unwrap_or([0x80, 0x9c, 0xff]);
+            let [r, g, b] = accent::readable_accent(rgb);
+            slint::Color::from_rgb_u8(r, g, b)
+        })
+        .collect()
+}
+fn set_accent_dots(app: &MainWindow, custom: Option<&str>) {
+    app.set_accent_dots(ModelRc::new(VecModel::from(accent_dots(custom))));
+}
 fn apply_config(app: &MainWindow, c: &Config) {
-    app.set_accent_index(match c.accent {
-        Accent::Blue => 0,
-        Accent::Purple => 1,
-        Accent::Green => 2,
-        Accent::Orange => 3,
-    });
+    set_accent_dots(app, c.accent_custom.as_deref());
+    let hex = c.accent_custom.clone().unwrap_or_default();
+    let custom = c.accent_custom.as_deref().and_then(accent::parse_hex);
+    app.set_custom_hex(hex.clone().into());
+    app.set_custom_hex_saved(hex.into());
+    app.set_custom_hex_valid(true);
+    app.set_custom_adjusted(custom.is_some_and(|rgb| accent::readable_accent(rgb) != rgb));
+    app.set_accent_index(c.accent.index() as i32);
     app.set_animations(c.animations);
     app.set_focus_close(c.close_on_focus_loss);
     app.set_linked(c.linked_displays);
@@ -512,6 +526,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Persistent models: rows are updated in place so a dragged slider survives.
     let display_model = Rc::new(VecModel::<DisplayRow>::default());
     let audio_model = Rc::new(VecModel::<AudioItem>::default());
+    set_accent_dots(&app, None);
     app.set_displays(ModelRc::from(display_model.clone()));
     app.set_audio(ModelRc::from(audio_model.clone()));
     // Rows the user is currently changing ignore worker values for a short time.
@@ -853,6 +868,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = tx.send(Command::Save(config_from(&a)));
                 sync_hotkey(&a, SearchHotkey::from_index(a.get_hotkey_index()));
             }
+        }
+    });
+    app.on_custom_hex_edited({
+        let weak = app.as_weak();
+        move |text| {
+            let Some(a) = weak.upgrade() else {
+                return;
+            };
+            // Empty field = nothing entered yet; anything else must parse or it is rejected
+            // (marked invalid, previous accepted color kept).
+            if text.trim().is_empty() {
+                a.set_custom_hex_valid(true);
+                return;
+            }
+            let Some(rgb) = accent::parse_hex(&text) else {
+                a.set_custom_hex_valid(false);
+                return;
+            };
+            let hex = accent::to_hex(rgb);
+            a.set_custom_hex_valid(true);
+            a.set_custom_adjusted(accent::readable_accent(rgb) != rgb);
+            a.set_custom_hex_saved(hex.as_str().into());
+            set_accent_dots(&a, Some(&hex));
+            a.invoke_save_settings();
         }
     });
     app.on_reset_settings({
