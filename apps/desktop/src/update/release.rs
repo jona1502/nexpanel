@@ -127,6 +127,24 @@ pub fn select_update(
         .cloned()
 }
 
+/// A well-formed release for tests of other modules.
+#[cfg(test)]
+pub(crate) fn test_release(tag: &str) -> Release {
+    let zip_name = package_name(&tag[1..]);
+    let asset = |name: String| Asset {
+        url: asset_url(tag, &name),
+        name,
+        size: 10,
+    };
+    Release {
+        version: Version::parse(tag).unwrap(),
+        tag: tag.into(),
+        prerelease: true,
+        sha256: asset(format!("{zip_name}.sha256")),
+        zip: asset(zip_name),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
