@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release-Tag, z. B. v0.1.0 (muss zur Version in apps/desktop/Cargo.toml passen)'
+        description: 'Release-Tag, z. B. v0.2.0 (muss zur Version in apps/desktop/Cargo.toml passen)'
         required: true
         type: string
       draft:
