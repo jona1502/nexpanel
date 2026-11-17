@@ -11,4 +11,5 @@ pub mod sha256;
 pub mod version;
 #[cfg(windows)]
 pub mod winhttp;
+pub mod worker;
 pub mod zip;
