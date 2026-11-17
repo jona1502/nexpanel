@@ -88,6 +88,7 @@ export component MainWindow inherits Window {
  in property<string> vram-text:"—"; in property<int> vram-pct; in property<int> vram-level;
  in property<string> gpu-name;
  in property<string> settings-error;
+ in property<string> hotkey-status; in property<bool> hotkey-warning:false;
  in property<bool> settings-ready:false;
  in property<bool> settings-blocked:false;
  in-out property<int> accent-index:0;
@@ -244,6 +245,7 @@ export component MainWindow inherits Window {
  CheckBox{text:"Mit Windows starten (im Tray)";checked:root.autostart;enabled:root.settings-ready;toggled=>{root.autostart=self.checked;root.save-settings();}}
  }}
  Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
+ if root.hotkey-status!="": Hint{text:root.hotkey-status;color:root.hotkey-warning?#ffbc91:#979eaf;}
  Button{text:"Einstellungen zurücksetzen";enabled:root.settings-ready;clicked=>{root.reset-settings();}}
  Hint{text:"NexPanel 0.1 · Windows 11\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
  }

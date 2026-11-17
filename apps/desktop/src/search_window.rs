@@ -3,7 +3,10 @@
 //! `ui/search.slint`; the glue that owns the window is `search_controller.rs` of the binary.
 
 use crate::{
-    nexsearch::{DEFAULT_LIMIT, NexCommand, SearchAction},
+    nexsearch::{
+        DEFAULT_LIMIT, NexCommand, SearchAction, SearchEngine, calc::CalcProvider,
+        commands::CommandProvider, launcher::LauncherProvider,
+    },
     platform::Area,
 };
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
@@ -159,6 +162,22 @@ pub fn window_bounds(work: Area, scale: f64) -> WindowBounds {
         position: (x, preferred_y.min(lowest_y)),
         physical_width: width as u32,
     }
+}
+
+/// Calculator and NexPanel commands: providers without I/O.
+pub fn core_engine() -> SearchEngine {
+    let mut engine = SearchEngine::new();
+    engine.add_provider(Box::new(CalcProvider));
+    engine.add_provider(Box::new(CommandProvider));
+    engine
+}
+
+/// The engine of the running app. Providers are not `Send`, so call this on the thread that
+/// queries it. Starts the Start menu index thread.
+pub fn build_engine() -> SearchEngine {
+    let mut engine = core_engine();
+    engine.add_provider(Box::new(LauncherProvider::start_menu()));
+    engine
 }
 
 /// Side effects of an activated result. The Win32 implementation lives in the binary glue; tests
@@ -649,6 +668,22 @@ mod tests {
             &mut host,
             &SearchAction::Command(NexCommand::ToggleAutostart)
         ));
+    }
+
+    #[test]
+    fn core_engine_answers_math_and_commands() {
+        let engine = core_engine();
+        let math = engine.search("2+2");
+        assert!(matches!(
+            math.first().map(|r| &r.action),
+            Some(SearchAction::CopyText(t)) if t == "4"
+        ));
+        let settings = engine.search("einstellungen");
+        assert_eq!(
+            settings.first().map(|r| r.action.clone()),
+            Some(SearchAction::Command(NexCommand::OpenSettings))
+        );
+        assert!(engine.search("   ").is_empty());
     }
 
     #[test]

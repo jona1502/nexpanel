@@ -120,6 +120,15 @@ impl HotkeyStatus {
     }
 }
 
+impl From<HotkeyError> for HotkeyStatus {
+    fn from(error: HotkeyError) -> Self {
+        match error {
+            HotkeyError::Conflict => Self::Conflict,
+            HotkeyError::Other(code) => Self::Failed(code),
+        }
+    }
+}
+
 /// Owns one registration: registers on demand, releases exactly once, never panics.
 pub struct HotkeyManager<B: HotkeyBackend> {
     backend: B,
@@ -235,8 +244,8 @@ mod win {
 
     impl SystemHotkey {
         /// Must be called on the UI thread; `handler` runs there, inside the message pump.
-        pub fn new(handler: Box<dyn Fn()>) -> windows::core::Result<Self> {
-            let hwnd = create_window()?;
+        pub fn new(handler: Box<dyn Fn()>) -> Result<Self, HotkeyError> {
+            let hwnd = create_window().map_err(|e| HotkeyError::from_code(e.code().0 as u32))?;
             let shared = Box::new(Shared { handler });
             // SAFETY: the pointer targets the boxed `Shared`, which `Drop` detaches again
             // before the box is freed.
@@ -353,7 +362,7 @@ mod win {
 pub struct SystemHotkey;
 #[cfg(not(windows))]
 impl SystemHotkey {
-    pub fn new(_: Box<dyn Fn()>) -> Result<Self, std::io::Error> {
+    pub fn new(_: Box<dyn Fn()>) -> Result<Self, HotkeyError> {
         Ok(Self)
     }
 }
