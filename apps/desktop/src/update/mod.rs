@@ -8,4 +8,6 @@ pub mod net;
 pub mod release;
 pub mod sha256;
 pub mod version;
+#[cfg(windows)]
+pub mod winhttp;
 pub mod zip;
