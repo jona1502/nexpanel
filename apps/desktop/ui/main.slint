@@ -110,7 +110,9 @@ export component MainWindow inherits Window {
  in-out property<bool> dropdown-open:false;
  // Tooltip state; `HoverTip` at the end of the window draws it.
  property<string> tip-text; property<length> tip-x; property<length> tip-y; property<length> tip-h; in-out property<bool> tip-visible:false;
- property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
+ property<[string]> accent-names:[@tr("Blau"),@tr("Violett"),@tr("Grün"),@tr("Orange"),@tr("Rot"),@tr("Rosa"),@tr("Magenta"),@tr("Türkis"),@tr("Cyan"),@tr("Gelb"),@tr("Limette"),@tr("Mint"),@tr("Koralle"),@tr("Silber"),@tr("Indigo"),@tr("Sand"),@tr("Eigene …")];
+ // One color per accent-names entry (last = custom color); set by Rust, readability already ensured there.
+ in property<[color]> accent-dots;
  property<[string]> hotkey-names:["Alt+Leertaste","Strg+Alt+Leertaste","Win+Alt+Leertaste"];
  property<[string]> position-names:["Mitte","Oben"];
  property<string> update-error-text:
@@ -151,7 +153,7 @@ export component MainWindow inherits Window {
  in property<bool> countdown-active:false;
  in-out property<int> time-seg:2;
  in property<string> input-h:"00"; in property<string> input-m:"05"; in property<string> input-s:"00";
- out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#809cff;
+ out property<color> accent:root.accent-index>=0&&root.accent-index<root.accent-dots.length?root.accent-dots[root.accent-index]:#809cff;
  function show-tip(t:string,x:length,y:length,h:length,s:bool){root.tip-text=t;root.tip-x=x;root.tip-y=y;root.tip-h=h;root.tip-visible=s;}
  changed tab => { root.tip-visible=false; root.scroll-y=0px; }
  callback hide-panel(); callback refresh-display(); callback refresh-audio();

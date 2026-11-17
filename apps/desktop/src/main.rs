@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use nexpanel::{
+    accent,
     config::{Accent, Config, SearchHotkey, SearchPosition},
     hotkey::{Hotkey, HotkeyManager, HotkeyStatus, SystemHotkey},
     meter,
@@ -327,7 +328,23 @@ fn config_from(app: &MainWindow) -> Config {
             .unwrap_or(0),
     }
 }
+/// Colors for the accent dropdown: presets plus the custom entry (default blue while unset).
+fn accent_dots(custom: Option<&str>) -> Vec<slint::Color> {
+    let custom = custom.and_then(accent::parse_hex);
+    Accent::ALL
+        .iter()
+        .map(|a| {
+            let rgb = a.rgb().or(custom).unwrap_or([0x80, 0x9c, 0xff]);
+            let [r, g, b] = accent::readable_accent(rgb);
+            slint::Color::from_rgb_u8(r, g, b)
+        })
+        .collect()
+}
+fn set_accent_dots(app: &MainWindow, custom: Option<&str>) {
+    app.set_accent_dots(ModelRc::new(VecModel::from(accent_dots(custom))));
+}
 fn apply_config(app: &MainWindow, c: &Config) {
+    set_accent_dots(app, c.accent_custom.as_deref());
     app.set_accent_index(c.accent.index() as i32);
     app.set_animations(c.animations);
     app.set_focus_close(c.close_on_focus_loss);
@@ -503,6 +520,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Persistent models: rows are updated in place so a dragged slider survives.
     let display_model = Rc::new(VecModel::<DisplayRow>::default());
     let audio_model = Rc::new(VecModel::<AudioItem>::default());
+    set_accent_dots(&app, None);
     app.set_displays(ModelRc::from(display_model.clone()));
     app.set_audio(ModelRc::from(audio_model.clone()));
     // Rows the user is currently changing ignore worker values for a short time.
