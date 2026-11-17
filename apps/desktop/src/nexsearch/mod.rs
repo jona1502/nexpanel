@@ -90,6 +90,7 @@ impl SearchEngine {
 
 pub mod calc;
 pub mod commands;
+pub mod launcher;
 
 #[cfg(test)]
 mod tests {
