@@ -315,7 +315,7 @@ fn dispatch(app: &MainWindow, popup: &RefCell<Popup>, event: Event, ms: u64) {
 fn config_from(app: &MainWindow) -> Config {
     Config {
         accent: Accent::from_index(app.get_accent_index()),
-        accent_custom: None,
+        accent_custom: Some(app.get_custom_hex_saved().to_string()).filter(|h| !h.is_empty()),
         animations: app.get_animations(),
         close_on_focus_loss: app.get_focus_close(),
         linked_displays: app.get_linked(),
@@ -345,6 +345,12 @@ fn set_accent_dots(app: &MainWindow, custom: Option<&str>) {
 }
 fn apply_config(app: &MainWindow, c: &Config) {
     set_accent_dots(app, c.accent_custom.as_deref());
+    let hex = c.accent_custom.clone().unwrap_or_default();
+    let custom = c.accent_custom.as_deref().and_then(accent::parse_hex);
+    app.set_custom_hex(hex.clone().into());
+    app.set_custom_hex_saved(hex.into());
+    app.set_custom_hex_valid(true);
+    app.set_custom_adjusted(custom.is_some_and(|rgb| accent::readable_accent(rgb) != rgb));
     app.set_accent_index(c.accent.index() as i32);
     app.set_animations(c.animations);
     app.set_focus_close(c.close_on_focus_loss);
