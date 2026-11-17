@@ -243,3 +243,19 @@ Overlay `HoverTip` (`ui/tooltip.slint`) am Ende von `MainWindow`; Zeilen nutzen 
 | Unterste Zeile hovern / lange Namen | Tooltip klappt nach oben, bleibt im Fenster, wird bei ca. 300 px gekürzt |
 | Maus aus dem Panel, Tab wechseln, Esc, „×“, Panel schließen und öffnen | Tooltip weg |
 | Dropdown im Einstellungs-Tab öffnen | Kein Tooltip, Dropdown bleibt oben |
+
+## Audio-Pegelanzeige (agent/audio-level-meter)
+
+Jede App-Zeile im Audio-Tab zeigt direkt über der Slider-Linie eine dünne Pegellinie (Peak je Sitzung, bei mehreren Sitzungen einer App das Maximum; dB-Skala von -60 bis 0 dBFS). Farbe grün bei leisem, gelb bei mittlerem, rot bei lautem Pegel. Messung im Audio-Worker (`IAudioMeterInformation::GetPeakValue`, ca. 25 Hz, schneller Anstieg, langsamer Abfall), nur solange das Panel sichtbar ist und der Audio-Tab offen ist. Logik (Skalierung, Glättung, Farbe) in `src/meter.rs` mit Unit-Tests; Peak-Aggregation je App mit Mock in `services/audio.rs`. Manuell prüfen:
+
+| Schritt | Erwartung |
+|---|---|
+| Musik/Video in einer App abspielen, Audio-Tab offen | Linie der App folgt der Lautstärke des Inhalts; leise Stellen kurze grüne Linie, laute Stellen länger und gelb bis rot |
+| Wiedergabe pausieren | Linie sinkt innerhalb von ca. 0,5 s auf 0 (kein Hängenbleiben) |
+| App mit mehreren Streams (z. B. Browser, zwei Tabs mit Ton) | Eine Zeile, Linie zeigt den lauteren Stream |
+| Stumm geschaltete App (Mute-Icon) | Linie wird wie der Slider abgedunkelt |
+| Slider einer spielenden App ziehen | Ziehen bleibt flüssig und bricht nicht ab, Linie läuft weiter, Zahl und Daumen springen nicht zurück |
+| Tab wechseln (Display, System) oder Panel verbergen | Audio-Thread `nexpanel-audio` hat keine periodischen Wakeups mehr (Prozess-Explorer, Thread-Zyklen); Linien sind beim Zurückkehren zunächst 0 |
+| Panel verborgen, Audio spielt | CPU-Leerlauf unverändert, keine Messung |
+| Master-Zeile | Keine Pegellinie (nur App-Zeilen) |
+| Systemsounds-Zeile, Sound auslösen | Kurzer Ausschlag, dann Abfall |

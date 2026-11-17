@@ -1,9 +1,12 @@
 // ThinSlider (volume, brightness): 2px track, 10px round thumb. `value` is 0..100; the shown value follows the
 // pointer while dragging and the bound value otherwise (so model updates keep flowing in).
+// Optional level meter: a 2px line directly above the track, `level` 0..100, colored by `level-color`.
 export component ThinSlider inherits Rectangle {
  in property<float> value;
  in property<bool> dimmed:false;
  in property<bool> enabled:true;
+ in property<float> level:0;
+ in property<color> level-color:#3ecf6e;
  callback changed(float);
  callback released();
  out property<bool> hovered:ta.has-hover;
@@ -16,6 +19,10 @@ export component ThinSlider inherits Rectangle {
  pure function to-value(x:length) -> float { max(0, min(100, (x - root.thumb/2) / (root.width - root.thumb) * 100)) }
  Rectangle {
   x:0px; y:(root.height - 2px)/2; width:root.width; height:2px; border-radius:1px; background:#5a5d68;
+  opacity:(root.dimmed||!root.enabled)?0.5:1;
+ }
+ Rectangle {
+  x:0px; y:(root.height - 2px)/2 - 3px; width:root.width*max(0, min(100, root.level))/100; height:2px; border-radius:1px; background:root.level-color;
   opacity:(root.dimmed||!root.enabled)?0.5:1;
  }
  Rectangle {

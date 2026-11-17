@@ -58,6 +58,8 @@ pub struct AudioSnapshot {
     pub device: String,
     pub status: String,
 }
+/// Smoothed peak level (0..=100) per app row id; sent only while metering and only on change.
+pub type AudioPeaks = Vec<(String, u8)>;
 /// Coarse change signal from Core Audio callbacks (sent from foreign COM threads).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioChange {
@@ -82,6 +84,8 @@ pub enum AudioCommand {
         muted: bool,
     },
     SetActive(bool),
+    /// Level meter on/off: only while the panel is visible and the audio tab is shown.
+    SetMetering(bool),
     /// Sent by Core Audio callbacks, not by the UI.
     Changed(AudioChange),
     Shutdown,
