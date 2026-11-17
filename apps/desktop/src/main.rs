@@ -24,6 +24,8 @@ use std::{
     time::{Duration, Instant},
 };
 slint::include_modules!();
+/// Unix time of the last update check; part of the settings file but not shown in the UI.
+static LAST_UPDATE_CHECK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 mod search_controller;
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
@@ -291,6 +293,8 @@ fn config_from(app: &MainWindow) -> Config {
         autostart: app.get_autostart(),
         search_hotkey: SearchHotkey::from_index(app.get_hotkey_index()),
         search_position: SearchPosition::from_index(app.get_position_index()),
+        auto_update_check: app.get_auto_update_check(),
+        last_update_check: LAST_UPDATE_CHECK.load(Ordering::Relaxed),
         last_tab: u8::try_from(sanitize_tab(u8::try_from(app.get_tab()).unwrap_or(u8::MAX)))
             .unwrap_or(0),
     }
@@ -308,6 +312,8 @@ fn apply_config(app: &MainWindow, c: &Config) {
     app.set_autostart(c.autostart);
     app.set_hotkey_index(c.search_hotkey.index() as i32);
     app.set_position_index(c.search_position.index() as i32);
+    app.set_auto_update_check(c.auto_update_check);
+    LAST_UPDATE_CHECK.store(c.last_update_check, Ordering::Relaxed);
 }
 fn apply_countdown_action(
     timer: &mut Countdown,

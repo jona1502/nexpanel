@@ -80,6 +80,10 @@ where
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
+fn lenient_u64<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_u64().unwrap_or(0))
+}
 /// Number of tabs in the panel; `last_tab` is always below this.
 pub const TAB_COUNT: u8 = 5;
 /// Any value that is not an integer in `0..TAB_COUNT` (negative, huge, text) becomes 0
@@ -110,6 +114,12 @@ pub struct Config {
     /// Where the NexSearch window opens (default: vertically centered).
     #[serde(deserialize_with = "lenient_enum")]
     pub search_position: SearchPosition,
+    /// Check for a new release at start and then at most once per 24 h (default on).
+    pub auto_update_check: bool,
+    /// Unix time (seconds) of the last update check attempt; 0 = never. Anything that is not a
+    /// non-negative integer becomes 0.
+    #[serde(deserialize_with = "lenient_u64")]
+    pub last_update_check: u64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -122,6 +132,8 @@ impl Default for Config {
             last_tab: 0,
             search_hotkey: SearchHotkey::default(),
             search_position: SearchPosition::default(),
+            auto_update_check: true,
+            last_update_check: 0,
         }
     }
 }
@@ -355,5 +367,62 @@ mod search_tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), 3);
+    }
+}
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    #[test]
+    fn update_options_default_for_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"autostart":true,"accent":"green"}"#).unwrap();
+        let config = load(&path).unwrap();
+        assert!(config.auto_update_check, "automatic check defaults to on");
+        assert_eq!(config.last_update_check, 0);
+        assert!(config.autostart);
+    }
+
+    #[test]
+    fn update_options_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let config = Config {
+            auto_update_check: false,
+            last_update_check: 1_800_000_123,
+            ..Config::default()
+        };
+        save(&path, &config).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#""auto_update_check": false"#), "{text}");
+        assert!(
+            text.contains(r#""last_update_check": 1800000123"#),
+            "{text}"
+        );
+        assert_eq!(load(&path).unwrap(), config);
+    }
+
+    #[test]
+    fn invalid_timestamp_falls_back_to_never() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for raw in [
+            "-5",
+            "1.5",
+            "\"yesterday\"",
+            "null",
+            "[1]",
+            "99999999999999999999999",
+        ] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"autostart":true,"last_update_check":{raw}}}"#),
+            )
+            .unwrap();
+            let config = load(&path).unwrap();
+            assert_eq!(config.last_update_check, 0, "{raw}");
+            assert!(config.autostart);
+        }
     }
 }
