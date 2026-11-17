@@ -276,7 +276,7 @@ export component MainWindow inherits Window {
  if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"AKZENTFARBE";}
- Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
  CheckBox{text:"Animationen";checked:root.animations;enabled:root.settings-ready;toggled=>{root.animations=self.checked;root.save-settings();}}
  CheckBox{text:"Bei Fokusverlust ausblenden";checked:root.focus-close;enabled:root.settings-ready;toggled=>{root.focus-close=self.checked;root.save-settings();}}
  CheckBox{text:"Displayhelligkeit koppeln";checked:root.linked;enabled:root.settings-ready;toggled=>{root.linked=self.checked;root.save-settings();}}
@@ -311,7 +311,7 @@ export component MainWindow inherits Window {
  }
  }
  }
- if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y;list-width:root.dd-w;
+ if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y+(root.dropdown-kind==0?root.scroll-y - root.dd-scroll0:0px);list-width:root.dd-w;
   chosen(i)=>{
    if root.dropdown-kind==1 { root.hotkey-index=i; } else if root.dropdown-kind==2 { root.position-index=i; } else { root.accent-index=i; }
    root.dropdown-open=false;root.save-settings();}
