@@ -6,6 +6,7 @@ pub mod install;
 pub mod machine;
 pub mod net;
 pub mod release;
+pub mod schedule;
 pub mod sha256;
 pub mod version;
 #[cfg(windows)]
