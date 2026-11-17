@@ -28,7 +28,9 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       # Tag-Push erzeugt immer einen Entwurf; nur manuell mit draft=false wird veröffentlicht.
-      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'true' }}
+      # Nicht `inputs.draft || 'true'`: bei false ergibt `false || 'true'` immer 'true'. Der String 'false'
+      # ist truthy, daher liefert `... && 'false' || 'true'` korrekt 'false' nur bei dispatch + draft=false.
+      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == false && 'false' || 'true' }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7.0.1
