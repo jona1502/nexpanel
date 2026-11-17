@@ -864,6 +864,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    app.on_custom_hex_edited({
+        let weak = app.as_weak();
+        move |text| {
+            let Some(a) = weak.upgrade() else {
+                return;
+            };
+            // Empty field = nothing entered yet; anything else must parse or it is rejected
+            // (marked invalid, previous accepted color kept).
+            if text.trim().is_empty() {
+                a.set_custom_hex_valid(true);
+                return;
+            }
+            let Some(rgb) = accent::parse_hex(&text) else {
+                a.set_custom_hex_valid(false);
+                return;
+            };
+            let hex = accent::to_hex(rgb);
+            a.set_custom_hex_valid(true);
+            a.set_custom_adjusted(accent::readable_accent(rgb) != rgb);
+            a.set_custom_hex_saved(hex.as_str().into());
+            set_accent_dots(&a, Some(&hex));
+            a.invoke_save_settings();
+        }
+    });
     app.on_reset_settings({
         let tx = stx.clone();
         move || {
