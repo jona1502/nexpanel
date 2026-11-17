@@ -139,6 +139,10 @@ export component MainWindow inherits Window {
  property<length> dd-x; property<length> dd-y; property<length> dd-w;
  // Scroll offset of the settings ScrollView (shared via two-way binding) and its value when the list was opened.
  property<length> scroll-y; property<length> dd-scroll0;
+ // List anchor (field bottom + 4px) following the scrolled field; list closes once the field leaves the scroll area.
+ property<length> dd-live-y: root.dd-y + root.scroll-y - root.dd-scroll0;
+ property<bool> dd-in-view: !root.dropdown-open || (root.dd-live-y - 40px >= tab-sep.absolute-position.y + 1px && root.dd-live-y - 4px <= root.height - 10px);
+ changed dd-in-view => { if !root.dd-in-view { root.dropdown-open=false; } }
  in property<string> countdown-text:"00:05:00";
  in property<string> stopwatch-text:"00:00:00";
  in property<bool> countdown-running:false;
@@ -167,7 +171,7 @@ export component MainWindow inherits Window {
  HorizontalLayout {spacing:4px;
  for label[i] in ["Audio","Displays","System","Zeit","Einstellungen"]: TabButton {text:label; active:root.tab==i; accent:root.accent; clicked=>{root.tab=i;}}
  }
- Rectangle {height:1px;background:#343640;}
+ tab-sep := Rectangle {height:1px;background:#343640;}
  if root.tab==0: VerticalLayout {vertical-stretch:1;spacing:6px;
  HorizontalLayout {height:26px;padding-left:4px;padding-right:4px;
  Text{text:root.audio-device;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;vertical-alignment:center;}
@@ -311,7 +315,7 @@ export component MainWindow inherits Window {
  }
  }
  }
- if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y+root.scroll-y - root.dd-scroll0;list-width:root.dd-w;
+ if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-live-y;list-width:root.dd-w;
   chosen(i)=>{
    if root.dropdown-kind==1 { root.hotkey-index=i; } else if root.dropdown-kind==2 { root.position-index=i; } else { root.accent-index=i; }
    root.dropdown-open=false;root.save-settings();}
