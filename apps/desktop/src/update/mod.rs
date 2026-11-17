@@ -2,6 +2,7 @@
 //! can be tested without network or Windows APIs; only `winhttp` and `install` touch the system.
 
 pub mod engine;
+pub mod install;
 pub mod machine;
 pub mod net;
 pub mod release;
