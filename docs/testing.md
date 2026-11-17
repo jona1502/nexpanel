@@ -243,3 +243,52 @@ Overlay `HoverTip` (`ui/tooltip.slint`) am Ende von `MainWindow`; Zeilen nutzen 
 | Unterste Zeile hovern / lange Namen | Tooltip klappt nach oben, bleibt im Fenster, wird bei ca. 300 px gekürzt |
 | Maus aus dem Panel, Tab wechseln, Esc, „×“, Panel schließen und öffnen | Tooltip weg |
 | Dropdown im Einstellungs-Tab öffnen | Kein Tooltip, Dropdown bleibt oben |
+
+## Audio-Pegelanzeige (agent/audio-level-meter)
+
+Jede App-Zeile im Audio-Tab zeigt direkt über der Slider-Linie eine dünne Pegellinie (Peak je Sitzung, bei mehreren Sitzungen einer App das Maximum; dB-Skala von -60 bis 0 dBFS). Farbe grün bei leisem, gelb bei mittlerem, rot bei lautem Pegel. Messung im Audio-Worker (`IAudioMeterInformation::GetPeakValue`, ca. 25 Hz, schneller Anstieg, langsamer Abfall), nur solange das Panel sichtbar ist und der Audio-Tab offen ist. Logik (Skalierung, Glättung, Farbe) in `src/meter.rs` mit Unit-Tests; Peak-Aggregation je App mit Mock in `services/audio.rs`. Manuell prüfen:
+
+| Schritt | Erwartung |
+|---|---|
+| Musik/Video in einer App abspielen, Audio-Tab offen | Linie der App folgt der Lautstärke des Inhalts; leise Stellen kurze grüne Linie, laute Stellen länger und gelb bis rot |
+| Wiedergabe pausieren | Linie sinkt innerhalb von ca. 0,5 s auf 0 (kein Hängenbleiben) |
+| App mit mehreren Streams (z. B. Browser, zwei Tabs mit Ton) | Eine Zeile, Linie zeigt den lauteren Stream |
+| Stumm geschaltete App (Mute-Icon) | Linie wird wie der Slider abgedunkelt |
+| Slider einer spielenden App ziehen | Ziehen bleibt flüssig und bricht nicht ab, Linie läuft weiter, Zahl und Daumen springen nicht zurück |
+| Tab wechseln (Display, System) oder Panel verbergen | Audio-Thread `nexpanel-audio` hat keine periodischen Wakeups mehr (Prozess-Explorer, Thread-Zyklen); Linien sind beim Zurückkehren zunächst 0 |
+| Panel verborgen, Audio spielt | CPU-Leerlauf unverändert, keine Messung |
+| Master-Zeile | Keine Pegellinie (nur App-Zeilen) |
+| Systemsounds-Zeile, Sound auslösen | Kurzer Ausschlag, dann Abfall |
+
+## NexSearch: globaler Hotkey und Suchfenster (feat/nexsearch-window)
+
+Logik mit Unit-Tests: `src/hotkey.rs` (Registrierung, Konflikt 1409, Fallback, Neu-Registrierung per Mock), `src/search_window.rs` (Auswahl/Navigation, Tasten, Positionsberechnung Mitte/Oben mit mehreren Monitoren, Negativkoordinaten und unterschiedlicher DPI, Aktionsdispatch per Mock), `src/config.rs` (Hotkey/Position, serde-Defaults). Die nativen Abläufe sind nur manuell prüfbar. Debug-Log: `NEXPANEL_LOG=debug`, Logdatei `%LOCALAPPDATA%\NexPanel\logs\nexpanel.log`.
+
+Einstellungen (Tab „Einstellungen“, Karte „NexSearch“): Hotkey Alt+Leertaste (Standard), Strg+Alt+Leertaste oder Win+Alt+Leertaste; Position „Mitte“ (Standard, Suchleiste vertikal zentriert) oder „Oben“ (15 % unter dem oberen Rand der Arbeitsfläche). Beides steht in `settings.json` (`search_hotkey`: `alt_space`/`ctrl_alt_space`/`win_alt_space`, `search_position`: `center`/`top`); fehlende oder unbekannte Werte ergeben die Standardwerte. Der Hotkey wird beim Start und bei jeder Änderung registriert, ohne Neustart.
+
+| Nr. | Aktion | Erwartung |
+|---|---|---|
+| S1 | Alt+Space drücken (Hotkey frei, App im Tray) | Suchfenster erscheint auf dem Monitor mit dem Mauszeiger, Eingabefeld hat den Fokus, kein Taskleistenbutton, kein Alt-Tab-Eintrag |
+| S2 | Alt+Space erneut, Esc, Klick auf ein anderes Fenster | Fenster schließt jeweils; erneutes Öffnen startet mit leerem Feld |
+| S3 | `2+2` tippen | Eine Zeile „4“, Enter kopiert „4“ in die Zwischenablage (einfügen zur Probe) und schließt das Fenster |
+| S4 | `einstellungen` tippen, Enter | Fenster schließt, Panel öffnet auf dem Tab „Einstellungen“ |
+| S5 | `autostart` + Enter | Autostart-Haken kippt (Checkbox und Tray-Menü stimmen überein); `beenden` + Enter beendet die App |
+| S6 | Programmname aus dem Startmenü tippen (Index braucht nach App-Start einen Moment), Enter | Programm startet, Fenster schließt, UI bleibt währenddessen bedienbar |
+| S7 | Pfeil hoch/runter | Auswahl wandert und springt am Ende/Anfang um; Maus bewegen wählt die Zeile unter dem Zeiger (nur bei Mausbewegung, nicht bei stillstehendem Zeiger), Klick führt aus |
+| S8 | Schnell tippen und löschen | Keine veralteten Ergebnisse, Fenster wächst/schrumpft mit der Trefferzahl, UI hängt nicht |
+| S9 | Unsinn tippen (`qqzzxx`) | Zeile „Keine Treffer“; Feld leeren → nur noch die Eingabezeile |
+| S10 | Zwei Monitore mit verschiedener Skalierung (z. B. 100 % und 150 %), Mauszeiger auf jeweils einem, Hotkey | Fenster erscheint auf dem Monitor des Mauszeigers (auch links vom Hauptmonitor), horizontal zentriert, scharf, Breite 640 logische px |
+| S11 | Position „Oben“ wählen, Fenster öffnen | 15 % unter der Oberkante der Arbeitsfläche (unter einer oben liegenden Taskleiste), ohne Neustart |
+| S12 | Position „Mitte“ wählen, öffnen | Eingabezeile in der vertikalen Mitte, Trefferliste wächst nach unten und bleibt im Bild |
+| S13 | Animationen im Panel ausschalten | Suchfenster blendet ohne Fade ein, Auswahlwechsel ohne Übergang |
+| S14 | Hotkey belegt (z. B. PowerToys Run mit Alt+Space läuft), NexPanel starten | Kein Absturz; Log `Hotkey Alt+Leertaste ist bereits belegt (Fehler 1409)`; einmalige Sprechblase; Einstellungs-Tab zeigt den Hinweis in Orange |
+| S15 | Im Konfliktfall Strg+Alt+Leertaste im Dropdown wählen | Hinweis wechselt auf „Globale Suche: Strg+Alt+Leertaste“, neue Kombination öffnet das Fenster sofort, Alt+Space bleibt beim anderen Programm |
+| S16 | Hotkey im Dropdown auf eine belegte Kombination ändern, während eine andere aktiv ist | Hinweis „… ist bereits belegt … Weiterhin aktiv: …“, die bisherige Kombination funktioniert weiter |
+| S17 | App beenden, Hotkey erneut verwenden | Kombination ist wieder frei (zum Beispiel für PowerToys) |
+| S18 | Panel offen (Tray), dann Hotkey | Panel schließt durch Fokusverlust, Suchfenster öffnet |
+
+Bei Fokus-Verweigerung durch Windows (Vordergrundsperre) schließt sich das Suchfenster nach etwa 0,4 s selbst, statt auf dem Bildschirm hängen zu bleiben. Ein Smoke-Test mit synthetischen Tastendrücken (Hotkey, Tippen, Fensterhöhe 56 → 101 → 453 px, Esc, Umschalten, Position „Oben“ aus `settings.json`) lief auf einem Debug-Build; Dropdown-Auswahl per Maus und mehrere Monitore sind nicht automatisiert geprüft.
+
+## NexSearch: Launcher mit shell:AppsFolder (agent/launcher-appsfolder)
+
+Der Launcher indexiert zusätzlich den virtuellen Ordner `shell:AppsFolder` (Store-/UWP-Apps wie Spotify und klassische Apps) neben den Startmenü-`.lnk`-Dateien. Start über `ShellExecuteW` mit `shell:AppsFolder\<AppUserModelID>`. Bei gleichem Namen gewinnt der AppsFolder-Eintrag (startet zuverlässig über die AppUserModelID). Die Aufzählung läuft mit eigenem COM-Init im Index-Thread. Kombination/Deduplizierung ist per Mock getestet (`combined_source_prefers_earlier_source`). Manuell: Alt+Leertaste, „spotify“ eingeben, Enter startet Spotify.

@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use nexpanel::{
-    config::{Accent, Config},
+    config::{Accent, Config, SearchHotkey, SearchPosition},
+    hotkey::{Hotkey, HotkeyManager, HotkeyStatus, SystemHotkey},
+    meter,
+    nexsearch::NexCommand,
     platform,
     popup_state::{Action, Event, Popup, State},
     services::{self, AudioCommand, DisplayCommand, system::SystemCommand},
@@ -21,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 slint::include_modules!();
+mod search_controller;
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
     Normal(bool),
@@ -127,11 +131,35 @@ fn next_tick_interval(state: &TickState) -> Option<Duration> {
         None
     }
 }
+fn peak_color(percent: u8) -> slint::Color {
+    let [r, g, b] = meter::level_color(percent);
+    slint::Color::from_rgb_u8(r, g, b)
+}
+/// Writes new levels into the audio rows; rows missing from `peaks` go back to 0. Only rows whose
+/// level changed are touched (`set_row_data`), so an ongoing slider drag is not disturbed.
+fn apply_peaks(model: &VecModel<AudioItem>, peaks: &[(String, u8)]) {
+    for i in 0..model.row_count() {
+        let Some(mut row) = model.row_data(i) else {
+            continue;
+        };
+        let level = peaks
+            .iter()
+            .find(|(id, _)| row.id.as_str() == id)
+            .map_or(0, |(_, level)| i32::from(*level));
+        if row.peak != level {
+            row.peak = level;
+            row.peak_color = peak_color(level.clamp(0, 100) as u8);
+            model.set_row_data(i, row);
+        }
+    }
+}
 /// Delay for the one-shot timer that wakes the loop exactly when a running countdown ends.
 fn expiry_delay(running: bool, remaining_ms: u64) -> Option<Duration> {
     // +10 ms so the wake-up never lands before the deadline (poll_expired needs `now >= end`).
     running.then(|| Duration::from_millis(remaining_ms.saturating_add(10)))
 }
+/// Applies the hotkey chosen in the settings (registers or re-registers it).
+type HotkeySync = Rc<dyn Fn(&MainWindow, SearchHotkey)>;
 type TickBody = Rc<RefCell<Box<dyn FnMut()>>>;
 /// Runs the tick now (no-op while it is already running).
 fn wake(body: &TickBody) {
@@ -261,6 +289,8 @@ fn config_from(app: &MainWindow) -> Config {
         close_on_focus_loss: app.get_focus_close(),
         linked_displays: app.get_linked(),
         autostart: app.get_autostart(),
+        search_hotkey: SearchHotkey::from_index(app.get_hotkey_index()),
+        search_position: SearchPosition::from_index(app.get_position_index()),
         last_tab: u8::try_from(sanitize_tab(u8::try_from(app.get_tab()).unwrap_or(u8::MAX)))
             .unwrap_or(0),
     }
@@ -276,6 +306,8 @@ fn apply_config(app: &MainWindow, c: &Config) {
     app.set_focus_close(c.close_on_focus_loss);
     app.set_linked(c.linked_displays);
     app.set_autostart(c.autostart);
+    app.set_hotkey_index(c.search_hotkey.index() as i32);
+    app.set_position_index(c.search_position.index() as i32);
 }
 fn apply_countdown_action(
     timer: &mut Countdown,
@@ -411,7 +443,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))?;
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     let (dtx, drx, display_crashed) = services::display::spawn();
-    let (atx, arx, audio_crashed) = services::audio::spawn();
+    let (atx, arx, audio_peaks, audio_crashed) = services::audio::spawn();
     let (ytx, yrx, system_crashed) = services::system::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
     // Last tab written to settings.json (or loaded from it); see `save_tab_if_changed`.
@@ -426,6 +458,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Rows the user is currently changing ignore worker values for a short time.
     let display_hold = Rc::new(RefCell::new(LocalHold::default()));
     let audio_hold = Rc::new(RefCell::new(LocalHold::default()));
+    // Level meter: polls the worker's peak channel at ~25 Hz, only while it is switched on.
+    let meter_timer = Rc::new(slint::Timer::default());
+    let meter_drain: Rc<dyn Fn(bool)> = {
+        let model = audio_model.clone();
+        Rc::new(move |clear: bool| {
+            let latest = audio_peaks.try_iter().last();
+            if clear {
+                apply_peaks(&model, &[]);
+            } else if let Some(peaks) = latest {
+                apply_peaks(&model, &peaks);
+            }
+        })
+    };
     let popup = Rc::new(RefCell::new(Popup::new()));
     let started = Instant::now();
     let ms = move || started.elapsed().as_millis() as u64;
@@ -511,6 +556,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     // Filled once the timers exist; lets the tray trigger an immediate check after resume.
     let timer_check: TimerCheck = Rc::default();
+    // App actions shared by the tray menu and NexSearch commands. Callers wake the tick
+    // afterwards (the panel may have been shown).
+    let app_command: Rc<dyn Fn(NexCommand)> = Rc::new({
+        let weak = app.as_weak();
+        let popup = popup.clone();
+        let quit_tx = stx.clone();
+        let saved_tab = saved_tab.clone();
+        move |command| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            match command {
+                NexCommand::OpenSettings => {
+                    app.set_tab(TAB_SETTINGS);
+                    dispatch(&app, &popup, Event::TrayOpen, ms());
+                }
+                // Before the first settings snapshot the save would be discarded
+                // while the property flips: ignore the request.
+                NexCommand::ToggleAutostart if !app.get_settings_ready() => {}
+                NexCommand::ToggleAutostart => {
+                    // Same path as the checkbox in the settings tab.
+                    app.set_autostart(!app.get_autostart());
+                    app.invoke_save_settings();
+                }
+                NexCommand::Quit => {
+                    if !capture_mode {
+                        save_tab_if_changed(&app, &quit_tx, &saved_tab);
+                    }
+                    let _ = slint::quit_event_loop();
+                }
+            }
+        }
+    });
     let tray = if capture_mode {
         None
     } else {
@@ -522,8 +600,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let timer_check = timer_check.clone();
                     let display_changes = dtx.clone();
                     let tick_body = tick_body.clone();
-                    let quit_tx = stx.clone();
-                    let saved_tab = saved_tab.clone();
+                    let app_command = app_command.clone();
                     move |event| {
                         let Some(app) = weak.upgrade() else {
                             return;
@@ -531,18 +608,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match event {
                             TrayEvent::Toggle => dispatch(&app, &popup, Event::TrayToggle, ms()),
                             TrayEvent::Open => dispatch(&app, &popup, Event::TrayOpen, ms()),
-                            TrayEvent::Settings => {
-                                app.set_tab(TAB_SETTINGS);
-                                dispatch(&app, &popup, Event::TrayOpen, ms());
-                            }
-                            // Before the first settings snapshot the save would be discarded
-                            // while the property flips: ignore the click.
-                            TrayEvent::ToggleAutostart if !app.get_settings_ready() => {}
-                            TrayEvent::ToggleAutostart => {
-                                // Same path as the checkbox in the settings tab.
-                                app.set_autostart(!app.get_autostart());
-                                app.invoke_save_settings();
-                            }
+                            TrayEvent::Settings => app_command(NexCommand::OpenSettings),
+                            TrayEvent::ToggleAutostart => app_command(NexCommand::ToggleAutostart),
                             TrayEvent::NotificationClicked => {
                                 app.set_tab(TAB_TIMER);
                                 dispatch(&app, &popup, Event::ShowRequested, ms());
@@ -555,12 +622,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             TrayEvent::DisplayChange => {
                                 let _ = display_changes.send(DisplayCommand::TopologyChanged);
                             }
-                            TrayEvent::Quit => {
-                                if !capture_mode {
-                                    save_tab_if_changed(&app, &quit_tx, &saved_tab);
-                                }
-                                let _ = slint::quit_event_loop();
-                            }
+                            TrayEvent::Quit => app_command(NexCommand::Quit),
                         }
                         // Panel may have been shown: refresh visibility, tick rate and snapshots now.
                         wake(&tick_body);
@@ -577,6 +639,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))?,
         )
     };
+    // NexSearch: window, worker and the global hotkey. Neither exists in capture mode.
+    let search = if capture_mode {
+        None
+    } else {
+        let command: Rc<dyn Fn(NexCommand)> = Rc::new({
+            let app_command = app_command.clone();
+            let tick_body = tick_body.clone();
+            move |command| {
+                app_command(command);
+                wake(&tick_body);
+            }
+        });
+        match search_controller::SearchController::new(command) {
+            Ok(controller) => Some(Rc::new(controller)),
+            Err(error) => {
+                log::error!("NexSearch-Fenster konnte nicht erstellt werden: {error}");
+                None
+            }
+        }
+    };
+    // The hotkey is registered once the settings snapshot says which one the user chose
+    // (`sync_hotkey`); changing it later re-registers at runtime without a restart.
+    let hotkey: Rc<RefCell<Option<HotkeyManager<SystemHotkey>>>> = Rc::default();
+    if let Some(search) = &search {
+        let handler = Box::new({
+            let (weak, search) = (app.as_weak(), search.clone());
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    search.toggle(
+                        app.get_accent(),
+                        app.get_animations(),
+                        SearchPosition::from_index(app.get_position_index()),
+                    );
+                }
+            }
+        });
+        match SystemHotkey::new(handler) {
+            Ok(backend) => {
+                *hotkey.borrow_mut() = Some(HotkeyManager::new(backend, Hotkey::ALT_SPACE));
+            }
+            Err(error) => {
+                log::error!("Hotkey-Fenster konnte nicht erstellt werden: {error}");
+                let status = HotkeyStatus::from(error);
+                app.set_hotkey_status(status.message(&Hotkey::ALT_SPACE).as_str().into());
+                app.set_hotkey_warning(true);
+            }
+        }
+    }
+    let sync_hotkey: HotkeySync = Rc::new({
+        let hotkey = hotkey.clone();
+        let applied = Cell::new(None::<SearchHotkey>);
+        move |app, choice| {
+            // Only a changed choice (or the first one) registers: saving unrelated settings must
+            // neither retry a conflicting hotkey nor show its balloon again.
+            if applied.replace(Some(choice)) == Some(choice) {
+                return;
+            }
+            let mut guard = hotkey.borrow_mut();
+            let Some(manager) = guard.as_mut() else {
+                return;
+            };
+            let status = manager.set_hotkey(choice.hotkey());
+            let message = manager.message();
+            app.set_hotkey_status(message.as_str().into());
+            app.set_hotkey_warning(status.is_problem());
+            if status.is_problem() {
+                // One balloon so the user learns that the hotkey is missing; the settings tab
+                // keeps the explanation.
+                tray::notify("NexPanel", &message);
+            }
+        }
+    });
     app.on_refresh_display({
         let tx = dtx.clone();
         move || {
@@ -649,6 +783,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.on_save_settings({
         let tx = stx.clone();
         let weak = app.as_weak();
+        let sync_hotkey = sync_hotkey.clone();
         move || {
             if capture_mode {
                 return;
@@ -657,6 +792,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && a.get_settings_ready()
             {
                 let _ = tx.send(Command::Save(config_from(&a)));
+                sync_hotkey(&a, SearchHotkey::from_index(a.get_hotkey_index()));
             }
         }
     });
@@ -791,8 +927,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
     let tick_popup = popup.clone();
+    let tick_sync_hotkey = sync_hotkey.clone();
     let tab_tx = stx.clone();
     let mut visible = None;
+    let mut meter_active = None;
     let mut crash_shown = (false, false, false);
     let mut system_active = None;
     let tick_timer = Rc::downgrade(&tick);
@@ -847,6 +985,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         master,
                         has_icon: icon.is_some(),
                         icon: icon.unwrap_or_default(),
+                        peak: 0,
+                        peak_color: peak_color(0),
                     }
                 };
                 let mut rows: Vec<_> = s
@@ -855,6 +995,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|r| to_item(r, true))
                     .chain(s.sessions.into_iter().map(|r| to_item(r, false)))
                     .collect();
+                // Snapshots carry no levels: keep the live ones so bars do not flicker.
+                for row in &mut rows {
+                    if let Some(old) = audio_model.iter().find(|o| o.id == row.id) {
+                        row.peak = old.peak;
+                        row.peak_color = old.peak_color;
+                    }
+                }
                 let mut hold = audio_hold.borrow_mut();
                 keep_held(&*audio_model, &mut rows, &mut hold, Instant::now(), |r| {
                     r.id.clone()
@@ -881,6 +1028,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(s) = srx.try_iter().last() {
                 apply_config(&a, &s.config);
+                tick_sync_hotkey(&a, s.config.search_hotkey);
                 // First snapshot only: restore the remembered tab unless an override
                 // (balloon click, tray "Einstellungen", timer expiry) already chose one.
                 if !tab_restored.replace(true) && !capture_mode {
@@ -927,6 +1075,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Panel just closed: remember the tab (only written if it changed).
                 if !active && !capture_mode {
                     save_tab_if_changed(&a, &tab_tx, &saved_tab);
+                }
+            }
+            // Level meter: measured and polled only while the panel is visible AND the Audio tab is shown.
+            let want_meter = active && a.get_tab() == TAB_AUDIO && !capture_mode;
+            if meter_active != Some(want_meter) {
+                meter_active = Some(want_meter);
+                let _ = atx.send(AudioCommand::SetMetering(want_meter));
+                if want_meter {
+                    let drain = meter_drain.clone();
+                    meter_timer.start(slint::TimerMode::Repeated, meter::INTERVAL, move || {
+                        drain(false)
+                    });
+                } else {
+                    meter_timer.stop();
+                    meter_drain(true);
                 }
             }
             // Sample only while the panel is visible AND the System tab is shown.
@@ -1051,6 +1214,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // The own tray host no longer keeps the loop alive; hiding the popup must not quit.
     slint::run_event_loop_until_quit()?;
+    // Release the hotkey before the windows go away. The closures above still share the
+    // manager, so take it out explicitly.
+    drop(hotkey.borrow_mut().take());
+    drop(search);
     drop(tray);
     log::info!("Event-Loop beendet, Worker werden gestoppt");
     tick.stop();
@@ -1203,6 +1370,26 @@ mod tests {
         }
         // The audio collapse feature was removed; the property must not come back.
         assert!(!compact.contains("apps-open"));
+    }
+    #[test]
+    fn peaks_update_only_changed_rows_and_reset_missing_ones() {
+        let row = |id: &str, value: i32, peak: i32| AudioItem {
+            id: id.into(),
+            value,
+            peak,
+            ..Default::default()
+        };
+        let model = VecModel::from(vec![row("a", 40, 10), row("b", 55, 0), row("c", 70, 30)]);
+        let rows =
+            |m: &VecModel<AudioItem>| m.iter().map(|r| (r.value, r.peak)).collect::<Vec<_>>();
+        apply_peaks(&model, &[("a".into(), 80), ("b".into(), 0)]);
+        // "a" rose, "b" unchanged, "c" is not reported anymore and drops to zero.
+        assert_eq!(rows(&model), [(40, 80), (55, 0), (70, 0)]);
+        assert_eq!(model.row_data(0).unwrap().peak_color, peak_color(80));
+        // Volume values are never touched by level updates.
+        apply_peaks(&model, &[]);
+        assert_eq!(rows(&model), [(40, 0), (55, 0), (70, 0)]);
+        assert_eq!(model.row_data(0).unwrap().peak_color, peak_color(0));
     }
     #[test]
     fn tab_constants_match_slint() {

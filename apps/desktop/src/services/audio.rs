@@ -1,5 +1,6 @@
 //! Core Audio interfaces never leave their owning worker thread.
-use super::{AppIcon, AudioChange, AudioCommand, AudioRow, AudioSnapshot};
+use super::{AppIcon, AudioChange, AudioCommand, AudioPeaks, AudioRow, AudioSnapshot};
+use crate::meter;
 use std::{
     collections::BTreeMap,
     sync::mpsc::{self, Receiver, Sender},
@@ -163,6 +164,58 @@ fn recompute<T>(group: &mut Group<T>) {
     group.row.muted = group.members.iter().all(|m| m.muted);
 }
 
+/// Something that can report the current linear peak (0..=1) of one audio session.
+/// Native sessions read `IAudioMeterInformation`; tests use mocks.
+#[cfg_attr(not(windows), allow(dead_code))]
+trait PeakSource {
+    /// `None` when the session has no meter or it cannot be read right now.
+    fn peak(&self) -> Option<f32>;
+}
+/// Raw peak per app row: the maximum over all sessions of the app.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn group_peaks<T: PeakSource>(groups: &[Group<T>]) -> Vec<(String, f32)> {
+    groups
+        .iter()
+        .map(|g| {
+            let peak = g
+                .members
+                .iter()
+                .filter_map(|m| m.control.peak())
+                .filter(|p| p.is_finite())
+                .fold(0., f32::max);
+            (g.row.id.clone(), peak)
+        })
+        .collect()
+}
+
+/// Longest time step fed to the smoother (after a stall the bar must not jump).
+const MAX_METER_STEP: Duration = Duration::from_millis(250);
+/// Smoothing state of the level meter; reports only changed level sets.
+#[derive(Default)]
+struct Metering {
+    smoother: meter::Smoother,
+    last_sent: AudioPeaks,
+    last_at: Option<Instant>,
+}
+impl Metering {
+    /// Feeds one raw measurement; `Some` only when the displayed levels changed.
+    fn sample(&mut self, raw: &[(String, f32)], now: Instant) -> Option<AudioPeaks> {
+        let dt = self
+            .last_at
+            .map_or(meter::INTERVAL, |t| now.saturating_duration_since(t))
+            .min(MAX_METER_STEP);
+        self.last_at = Some(now);
+        let levels = self.smoother.update(raw, dt);
+        (levels != self.last_sent).then(|| {
+            self.last_sent = levels.clone();
+            levels
+        })
+    }
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// What the worker has to re-read. Set by COM callbacks (via `AudioChange`) and by writes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Dirty(u8);
@@ -224,6 +277,7 @@ struct Pending {
     dirty: Dirty,
     writes: Vec<AudioCommand>,
     active: Option<bool>,
+    metering: Option<bool>,
     shutdown: bool,
     /// Explicit user action (write or refresh): never delayed by debouncing.
     urgent: bool,
@@ -233,6 +287,7 @@ impl Pending {
         match command {
             AudioCommand::Shutdown => self.shutdown = true,
             AudioCommand::SetActive(value) => self.active = Some(value),
+            AudioCommand::SetMetering(value) => self.metering = Some(value),
             AudioCommand::SetVolume { id, value } => {
                 // Last value for a target wins, while mute commands retain order.
                 self.writes
@@ -268,16 +323,18 @@ fn debounce_wait(pending: &Pending, since_first: Duration) -> Option<Duration> {
 pub fn spawn() -> (
     Sender<AudioCommand>,
     Receiver<AudioSnapshot>,
+    Receiver<AudioPeaks>,
     crate::logging::CrashFlag,
 ) {
     let (commands, input) = mpsc::channel();
     let (output, snapshots) = mpsc::channel();
+    let (peaks_out, peaks) = mpsc::channel();
     let crashed = crate::logging::CrashFlag::default();
     let events = commands.clone();
     crate::logging::spawn_worker("nexpanel-audio", &crashed, move || {
-        worker(input, output, events)
+        worker(input, output, peaks_out, events)
     });
-    (commands, snapshots, crashed)
+    (commands, snapshots, peaks, crashed)
 }
 pub fn diagnose() -> AudioSnapshot {
     native::diagnose()
@@ -286,6 +343,7 @@ pub fn diagnose() -> AudioSnapshot {
 fn worker(
     input: Receiver<AudioCommand>,
     output: Sender<AudioSnapshot>,
+    peaks_out: Sender<AudioPeaks>,
     events: Sender<AudioCommand>,
 ) {
     let mut active = true;
@@ -313,14 +371,38 @@ fn worker(
     }
     // Changes seen while the panel is hidden; applied once it is shown again.
     let mut deferred = Dirty::default();
+    // Level meter: wanted by the UI (audio tab shown) and only ever run while the panel is active.
+    // While off, the worker sleeps exactly as before (no periodic wake-ups).
+    let mut metering_wanted = false;
+    let mut metering = false;
+    let mut meter = Metering::default();
+    let mut next_sample = Instant::now();
+    let mut fallback_at = Instant::now() + FALLBACK;
     loop {
         let mut pending = Pending::default();
         let first = if active {
-            match input.recv_timeout(FALLBACK) {
+            let wake = if metering {
+                next_sample.min(fallback_at)
+            } else {
+                fallback_at
+            };
+            match input.recv_timeout(wake.saturating_duration_since(Instant::now())) {
                 Ok(command) => Some(command),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    pending.dirty.insert(Dirty::ALL);
-                    None
+                    let now = Instant::now();
+                    if now >= fallback_at {
+                        pending.dirty.insert(Dirty::ALL);
+                        None
+                    } else {
+                        // Only a meter tick is due: no other work, no debounce.
+                        if metering
+                            && now >= next_sample
+                            && !send_peaks(&backend, &mut meter, &peaks_out, &mut next_sample)
+                        {
+                            return;
+                        }
+                        continue;
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
@@ -350,9 +432,26 @@ fn worker(
         if pending.shutdown {
             return;
         }
+        fallback_at = Instant::now() + FALLBACK;
         if let Some(value) = pending.active {
             pending.dirty.insert(activation_dirty(active, value));
             active = value;
+        }
+        if let Some(value) = pending.metering {
+            metering_wanted = value;
+        }
+        let was_metering = metering;
+        metering = active && metering_wanted;
+        if metering != was_metering {
+            // Start from silence on every (re)start; the UI clears its bars on stop.
+            meter.reset();
+            next_sample = Instant::now();
+        }
+        if metering
+            && Instant::now() >= next_sample
+            && !send_peaks(&backend, &mut meter, &peaks_out, &mut next_sample)
+        {
+            return;
         }
         let mut dirty = pending.dirty;
         dirty.insert(deferred.take());
@@ -377,6 +476,21 @@ fn worker(
             }
             last = snapshot;
         }
+    }
+}
+
+/// Measures, smooths and pushes the levels; false when the UI side is gone.
+fn send_peaks(
+    backend: &native::Backend,
+    meter: &mut Metering,
+    out: &Sender<AudioPeaks>,
+    next_sample: &mut Instant,
+) -> bool {
+    let now = Instant::now();
+    *next_sample = now + meter::INTERVAL;
+    match meter.sample(&backend.peaks(), now) {
+        Some(levels) => out.send(levels).is_ok(),
+        None => true,
     }
 }
 
@@ -419,7 +533,7 @@ mod native {
             Media::Audio::{
                 Endpoints::{
                     IAudioEndpointVolume, IAudioEndpointVolumeCallback,
-                    IAudioEndpointVolumeCallback_Impl,
+                    IAudioEndpointVolumeCallback_Impl, IAudioMeterInformation,
                 },
                 *,
             },
@@ -763,11 +877,22 @@ mod native {
         }
     }
 
+    /// Per-session COM interfaces (never leave the worker thread).
+    pub(super) struct Session {
+        volume: ISimpleAudioVolume,
+        /// Missing on sessions that do not expose a meter.
+        meter: Option<IAudioMeterInformation>,
+    }
+    impl PeakSource for Session {
+        fn peak(&self) -> Option<f32> {
+            unsafe { self.meter.as_ref()?.GetPeakValue() }.ok()
+        }
+    }
     struct State {
         id: String,
         endpoint: IAudioEndpointVolume,
         manager: IAudioSessionManager2,
-        groups: Vec<Group<ISimpleAudioVolume>>,
+        groups: Vec<Group<Session>>,
         master: AudioRow,
         device_name: String,
         skipped: usize,
@@ -849,8 +974,8 @@ mod native {
             for group in &mut self.groups {
                 for member in &mut group.members {
                     unsafe {
-                        member.volume = percent(member.control.GetMasterVolume()?);
-                        member.muted = member.control.GetMute()?.as_bool();
+                        member.volume = percent(member.control.volume.GetMasterVolume()?);
+                        member.muted = member.control.volume.GetMute()?.as_bool();
                     }
                 }
                 recompute(group);
@@ -865,7 +990,7 @@ mod native {
                 let mut skipped = 0;
                 for index in 0..sessions.GetCount()? {
                     let result = (|| -> windows::core::Result<
-                        Option<(Member<ISimpleAudioVolume>, IAudioSessionControl)>,
+                        Option<(Member<Session>, IAudioSessionControl)>,
                     > {
                         let control = sessions.GetSession(index)?;
                         if control.GetState()? == AudioSessionStateExpired {
@@ -873,6 +998,7 @@ mod native {
                         }
                         let extended: IAudioSessionControl2 = control.cast()?;
                         let volume: ISimpleAudioVolume = control.cast()?;
+                        let meter: Option<IAudioMeterInformation> = control.cast().ok();
                         let instance =
                             Allocation(extended.GetSessionInstanceIdentifier()?).string();
                         if instance.is_empty() {
@@ -911,7 +1037,7 @@ mod native {
                                 volume: percent(volume.GetMasterVolume()?),
                                 muted: volume.GetMute()?.as_bool(),
                                 icon,
-                                control: volume,
+                                control: Session { volume, meter },
                             },
                             control,
                         )))
@@ -1069,6 +1195,13 @@ mod native {
             self.sync();
             self.snapshot()
         }
+        /// Raw peak per app row from the sessions known at the last refresh.
+        pub(super) fn peaks(&self) -> Vec<(String, f32)> {
+            self.state
+                .as_ref()
+                .map(|state| group_peaks(&state.groups))
+                .unwrap_or_default()
+        }
         pub(super) fn write(&mut self, command: AudioCommand) -> Result<(), String> {
             // Apply pending changes first: a queued ID never targets a stale endpoint or session.
             self.sync();
@@ -1100,9 +1233,13 @@ mod native {
                 apply_group(&state.groups, &id, |control| {
                     unsafe {
                         if let Some(value) = volume {
-                            control.SetMasterVolume(f32::from(value) / 100., std::ptr::null())
+                            control
+                                .volume
+                                .SetMasterVolume(f32::from(value) / 100., std::ptr::null())
                         } else {
-                            control.SetMute(mute.unwrap_or(false), std::ptr::null())
+                            control
+                                .volume
+                                .SetMute(mute.unwrap_or(false), std::ptr::null())
                         }
                     }
                     .map_err(error)
@@ -1134,6 +1271,9 @@ mod native {
         pub(super) fn mark(&mut self, _: Dirty) {}
         pub(super) fn refresh(&mut self) -> AudioSnapshot {
             diagnose()
+        }
+        pub(super) fn peaks(&self) -> Vec<(String, f32)> {
+            Vec::new()
         }
         pub(super) fn write(&mut self, _: AudioCommand) -> Result<(), String> {
             Err("Audio-Steuerung benötigt Windows.".into())
@@ -1594,6 +1734,93 @@ mod tests {
         recompute(&mut g[0]);
         assert_eq!(g[0].row.volume, 90);
         assert!(!g[0].row.muted);
+    }
+    /// Mock session: a fixed linear peak, or no meter at all.
+    struct MockMeter(Option<f32>);
+    impl PeakSource for MockMeter {
+        fn peak(&self) -> Option<f32> {
+            self.0
+        }
+    }
+    fn mock_member(instance: &str, pid: u32, peak: Option<f32>) -> Member<MockMeter> {
+        Member {
+            instance: instance.into(),
+            pid,
+            system: false,
+            path: Some(format!(r"C:\Apps\P{pid}.exe")),
+            session_id: String::new(),
+            display: String::new(),
+            name: "App".into(),
+            volume: 50,
+            muted: false,
+            icon: None,
+            control: MockMeter(peak),
+        }
+    }
+    #[test]
+    fn group_peak_is_the_maximum_over_sessions_and_ignores_unreadable_ones() {
+        let g = groups(
+            "e",
+            vec![
+                mock_member("a", 7, Some(0.2)),
+                mock_member("b", 7, Some(0.7)),
+                mock_member("c", 7, None),
+                mock_member("d", 8, None),
+                mock_member("e", 9, Some(f32::NAN)),
+            ],
+        );
+        let peaks = group_peaks(&g);
+        assert_eq!(peaks.len(), 3);
+        assert_eq!(peaks[0], ("e|app:c:\\apps\\p7.exe".to_owned(), 0.7));
+        assert_eq!(peaks[1].1, 0.);
+        assert_eq!(peaks[2].1, 0.);
+        assert!(group_peaks::<MockMeter>(&[]).is_empty());
+    }
+    #[test]
+    fn metering_reports_only_changed_levels() {
+        let mut m = Metering::default();
+        let t0 = Instant::now();
+        let loud = vec![("a".to_owned(), 1.0f32)];
+        let silent = vec![("a".to_owned(), 0.0f32)];
+        let first = m.sample(&loud, t0).expect("rise is reported");
+        assert!(first[0].1 > 50);
+        // Falls gradually: still reported while sinking, then stops reporting at zero.
+        let mut now = t0;
+        let mut reports = 0;
+        for _ in 0..200 {
+            now += meter::INTERVAL;
+            if m.sample(&silent, now).is_some() {
+                reports += 1;
+            }
+        }
+        assert!(reports > 3 && reports < 100, "reports {reports}");
+        assert_eq!(m.sample(&silent, now + meter::INTERVAL), None);
+        // Silence from the start sends one initial all-zero set, then nothing.
+        m.reset();
+        assert!(m.sample(&silent, now).is_some());
+        assert_eq!(m.sample(&silent, now + meter::INTERVAL), None);
+    }
+    #[test]
+    fn metering_clamps_long_stalls() {
+        let mut m = Metering::default();
+        let t0 = Instant::now();
+        let loud = vec![("a".to_owned(), 1.0f32)];
+        m.sample(&loud, t0);
+        // A one-minute gap is treated as at most MAX_METER_STEP of fall.
+        let after = m
+            .sample(&[("a".to_owned(), 0.0)], t0 + Duration::from_secs(60))
+            .expect("level changed");
+        assert!(after[0].1 > 20, "level {}", after[0].1);
+    }
+    #[test]
+    fn metering_command_is_absorbed_and_not_a_write() {
+        let mut p = Pending::default();
+        p.absorb(AudioCommand::SetMetering(true));
+        p.absorb(AudioCommand::SetMetering(false));
+        assert_eq!(p.metering, Some(false));
+        assert!(p.writes.is_empty() && p.dirty.is_empty() && !p.urgent);
+        // A pure meter command does not disturb debouncing decisions.
+        assert_eq!(debounce_wait(&p, Duration::ZERO), None);
     }
     #[test]
     fn snapshot_diff_suppresses_identical_snapshots() {
