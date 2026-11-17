@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod config;
 pub mod logging;
+pub mod nexsearch;
 pub mod platform;
 pub mod popup_state;
 pub mod services;
