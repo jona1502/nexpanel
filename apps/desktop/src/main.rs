@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use nexpanel::{
-    config::{Accent, Config},
-    meter, platform,
+    config::{Accent, Config, SearchHotkey, SearchPosition},
+    hotkey::{Hotkey, HotkeyManager, HotkeyStatus, SystemHotkey},
+    meter,
+    nexsearch::NexCommand,
+    platform,
     popup_state::{Action, Event, Popup, State},
     services::{self, AudioCommand, DisplayCommand, system::SystemCommand},
     settings_worker::{self, Command},
@@ -21,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 slint::include_modules!();
+mod search_controller;
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
     Normal(bool),
@@ -154,6 +158,8 @@ fn expiry_delay(running: bool, remaining_ms: u64) -> Option<Duration> {
     // +10 ms so the wake-up never lands before the deadline (poll_expired needs `now >= end`).
     running.then(|| Duration::from_millis(remaining_ms.saturating_add(10)))
 }
+/// Applies the hotkey chosen in the settings (registers or re-registers it).
+type HotkeySync = Rc<dyn Fn(&MainWindow, SearchHotkey)>;
 type TickBody = Rc<RefCell<Box<dyn FnMut()>>>;
 /// Runs the tick now (no-op while it is already running).
 fn wake(body: &TickBody) {
@@ -283,6 +289,8 @@ fn config_from(app: &MainWindow) -> Config {
         close_on_focus_loss: app.get_focus_close(),
         linked_displays: app.get_linked(),
         autostart: app.get_autostart(),
+        search_hotkey: SearchHotkey::from_index(app.get_hotkey_index()),
+        search_position: SearchPosition::from_index(app.get_position_index()),
         last_tab: u8::try_from(sanitize_tab(u8::try_from(app.get_tab()).unwrap_or(u8::MAX)))
             .unwrap_or(0),
     }
@@ -298,6 +306,8 @@ fn apply_config(app: &MainWindow, c: &Config) {
     app.set_focus_close(c.close_on_focus_loss);
     app.set_linked(c.linked_displays);
     app.set_autostart(c.autostart);
+    app.set_hotkey_index(c.search_hotkey.index() as i32);
+    app.set_position_index(c.search_position.index() as i32);
 }
 fn apply_countdown_action(
     timer: &mut Countdown,
@@ -546,6 +556,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     // Filled once the timers exist; lets the tray trigger an immediate check after resume.
     let timer_check: TimerCheck = Rc::default();
+    // App actions shared by the tray menu and NexSearch commands. Callers wake the tick
+    // afterwards (the panel may have been shown).
+    let app_command: Rc<dyn Fn(NexCommand)> = Rc::new({
+        let weak = app.as_weak();
+        let popup = popup.clone();
+        let quit_tx = stx.clone();
+        let saved_tab = saved_tab.clone();
+        move |command| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            match command {
+                NexCommand::OpenSettings => {
+                    app.set_tab(TAB_SETTINGS);
+                    dispatch(&app, &popup, Event::TrayOpen, ms());
+                }
+                // Before the first settings snapshot the save would be discarded
+                // while the property flips: ignore the request.
+                NexCommand::ToggleAutostart if !app.get_settings_ready() => {}
+                NexCommand::ToggleAutostart => {
+                    // Same path as the checkbox in the settings tab.
+                    app.set_autostart(!app.get_autostart());
+                    app.invoke_save_settings();
+                }
+                NexCommand::Quit => {
+                    if !capture_mode {
+                        save_tab_if_changed(&app, &quit_tx, &saved_tab);
+                    }
+                    let _ = slint::quit_event_loop();
+                }
+            }
+        }
+    });
     let tray = if capture_mode {
         None
     } else {
@@ -557,8 +600,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let timer_check = timer_check.clone();
                     let display_changes = dtx.clone();
                     let tick_body = tick_body.clone();
-                    let quit_tx = stx.clone();
-                    let saved_tab = saved_tab.clone();
+                    let app_command = app_command.clone();
                     move |event| {
                         let Some(app) = weak.upgrade() else {
                             return;
@@ -566,18 +608,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match event {
                             TrayEvent::Toggle => dispatch(&app, &popup, Event::TrayToggle, ms()),
                             TrayEvent::Open => dispatch(&app, &popup, Event::TrayOpen, ms()),
-                            TrayEvent::Settings => {
-                                app.set_tab(TAB_SETTINGS);
-                                dispatch(&app, &popup, Event::TrayOpen, ms());
-                            }
-                            // Before the first settings snapshot the save would be discarded
-                            // while the property flips: ignore the click.
-                            TrayEvent::ToggleAutostart if !app.get_settings_ready() => {}
-                            TrayEvent::ToggleAutostart => {
-                                // Same path as the checkbox in the settings tab.
-                                app.set_autostart(!app.get_autostart());
-                                app.invoke_save_settings();
-                            }
+                            TrayEvent::Settings => app_command(NexCommand::OpenSettings),
+                            TrayEvent::ToggleAutostart => app_command(NexCommand::ToggleAutostart),
                             TrayEvent::NotificationClicked => {
                                 app.set_tab(TAB_TIMER);
                                 dispatch(&app, &popup, Event::ShowRequested, ms());
@@ -590,12 +622,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             TrayEvent::DisplayChange => {
                                 let _ = display_changes.send(DisplayCommand::TopologyChanged);
                             }
-                            TrayEvent::Quit => {
-                                if !capture_mode {
-                                    save_tab_if_changed(&app, &quit_tx, &saved_tab);
-                                }
-                                let _ = slint::quit_event_loop();
-                            }
+                            TrayEvent::Quit => app_command(NexCommand::Quit),
                         }
                         // Panel may have been shown: refresh visibility, tick rate and snapshots now.
                         wake(&tick_body);
@@ -612,6 +639,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))?,
         )
     };
+    // NexSearch: window, worker and the global hotkey. Neither exists in capture mode.
+    let search = if capture_mode {
+        None
+    } else {
+        let command: Rc<dyn Fn(NexCommand)> = Rc::new({
+            let app_command = app_command.clone();
+            let tick_body = tick_body.clone();
+            move |command| {
+                app_command(command);
+                wake(&tick_body);
+            }
+        });
+        match search_controller::SearchController::new(command) {
+            Ok(controller) => Some(Rc::new(controller)),
+            Err(error) => {
+                log::error!("NexSearch-Fenster konnte nicht erstellt werden: {error}");
+                None
+            }
+        }
+    };
+    // The hotkey is registered once the settings snapshot says which one the user chose
+    // (`sync_hotkey`); changing it later re-registers at runtime without a restart.
+    let hotkey: Rc<RefCell<Option<HotkeyManager<SystemHotkey>>>> = Rc::default();
+    if let Some(search) = &search {
+        let handler = Box::new({
+            let (weak, search) = (app.as_weak(), search.clone());
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    search.toggle(
+                        app.get_accent(),
+                        app.get_animations(),
+                        SearchPosition::from_index(app.get_position_index()),
+                    );
+                }
+            }
+        });
+        match SystemHotkey::new(handler) {
+            Ok(backend) => {
+                *hotkey.borrow_mut() = Some(HotkeyManager::new(backend, Hotkey::ALT_SPACE));
+            }
+            Err(error) => {
+                log::error!("Hotkey-Fenster konnte nicht erstellt werden: {error}");
+                let status = HotkeyStatus::from(error);
+                app.set_hotkey_status(status.message(&Hotkey::ALT_SPACE).as_str().into());
+                app.set_hotkey_warning(true);
+            }
+        }
+    }
+    let sync_hotkey: HotkeySync = Rc::new({
+        let hotkey = hotkey.clone();
+        let applied = Cell::new(None::<SearchHotkey>);
+        move |app, choice| {
+            // Only a changed choice (or the first one) registers: saving unrelated settings must
+            // neither retry a conflicting hotkey nor show its balloon again.
+            if applied.replace(Some(choice)) == Some(choice) {
+                return;
+            }
+            let mut guard = hotkey.borrow_mut();
+            let Some(manager) = guard.as_mut() else {
+                return;
+            };
+            let status = manager.set_hotkey(choice.hotkey());
+            let message = manager.message();
+            app.set_hotkey_status(message.as_str().into());
+            app.set_hotkey_warning(status.is_problem());
+            if status.is_problem() {
+                // One balloon so the user learns that the hotkey is missing; the settings tab
+                // keeps the explanation.
+                tray::notify("NexPanel", &message);
+            }
+        }
+    });
     app.on_refresh_display({
         let tx = dtx.clone();
         move || {
@@ -684,6 +783,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.on_save_settings({
         let tx = stx.clone();
         let weak = app.as_weak();
+        let sync_hotkey = sync_hotkey.clone();
         move || {
             if capture_mode {
                 return;
@@ -692,6 +792,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && a.get_settings_ready()
             {
                 let _ = tx.send(Command::Save(config_from(&a)));
+                sync_hotkey(&a, SearchHotkey::from_index(a.get_hotkey_index()));
             }
         }
     });
@@ -826,6 +927,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot_ready = ready.clone();
     let weak = app.as_weak();
     let tick_popup = popup.clone();
+    let tick_sync_hotkey = sync_hotkey.clone();
     let tab_tx = stx.clone();
     let mut visible = None;
     let mut meter_active = None;
@@ -926,6 +1028,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(s) = srx.try_iter().last() {
                 apply_config(&a, &s.config);
+                tick_sync_hotkey(&a, s.config.search_hotkey);
                 // First snapshot only: restore the remembered tab unless an override
                 // (balloon click, tray "Einstellungen", timer expiry) already chose one.
                 if !tab_restored.replace(true) && !capture_mode {
@@ -1111,6 +1214,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // The own tray host no longer keeps the loop alive; hiding the popup must not quit.
     slint::run_event_loop_until_quit()?;
+    // Release the hotkey before the windows go away. The closures above still share the
+    // manager, so take it out explicitly.
+    drop(hotkey.borrow_mut().take());
+    drop(search);
     drop(tray);
     log::info!("Event-Loop beendet, Worker werden gestoppt");
     tick.stop();
