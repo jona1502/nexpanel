@@ -316,3 +316,21 @@ Nur manuell prüfbar, mit einem echten Test-Release oder lokal nachgebautem Pake
 | U13 | Während des Downloads über das Tray-Menü beenden | Beendet sich innerhalb weniger Sekunden, keine Reste im Installationsordner |
 
 Bekannte Grenzen: Neustart nach dem Austausch (`--wait-pid`, Single-Instance-Übergabe) und das Ersetzen der laufenden exe sind nur in einer Testinstallation praktisch prüfbar. Dass eine laufende exe umbenannt und unter dem alten Namen neu angelegt, aber nicht gelöscht werden kann, wurde einmalig mit einer Kopie von `timeout.exe` in einem Temp-Ordner bestätigt. Die Releases sind unsigniert; siehe Sicherheitshinweis in [releasing.md](releasing.md).
+
+## Manuell: Akzentfarben (agent/accent-colors)
+
+Vorschau: `nexpanel.exe --capture-preview <Ordner>` (`05-einstellungen.png`). Einstellungen > Akzentfarbe.
+
+| Prüfung | Erwartung |
+| --- | --- |
+| Dropdown öffnen | 17 Einträge mit Farbpunkt (16 Farben + „Eigene …“); Liste ist ca. 240 px hoch und scrollt (Mausrad, Scrollbalken); Fenster wird nicht gesprengt; Liste öffnet am aktuellen Eintrag |
+| Pfeil auf/ab, Enter | Markierung wandert, Liste scrollt mit, Enter übernimmt; Esc schließt nur die Liste (zweites Esc das Panel) |
+| Eintrag per Maus wählen | Akzent (Titel, aktiver Tab, Balken, Zeit-Tab, NexSearch) wechselt sofort, bleibt nach Neustart |
+| Einstellungen-Tab scrollen, solange Liste offen ist | Liste haftet am Feld und schließt, sobald das Feld aus dem Sichtbereich läuft |
+| „Eigene …“ wählen | Unter dem Dropdown erscheinen Vorschau-Feld und Hex-Eingabe |
+| `#5ac8fa`, `5ac8fa`, `#0af`, `0AF` eingeben | Gültig: Vorschau und Akzent sofort in dieser Farbe, bleibt nach Neustart |
+| `#12zz`, `#1234`, `abc!` eingeben | Feld rot markiert, Hinweis „Ungültig …“, Akzent bleibt bei der letzten gültigen Farbe, nichts Ungültiges in settings.json |
+| `#000000` oder `#303060` eingeben | Wird auf Mindestkontrast (4,5 : 1 zu `#252832`) aufgehellt, Hinweis „Zu dunkel …“; Text bleibt lesbar |
+| Alte settings.json (`"accent":"green"`) / unbekannter Wert (`"accent":"x"`) | Lädt; Grün bzw. Standardblau, kein Fehler |
+| `"accent":"custom"` ohne/mit kaputtem `accent_custom` | Lädt; Eigene-Farbe-Feld leer, Akzent Standardblau |
+| „Einstellungen zurücksetzen“ | Akzent Blau, Eigene-Farbe-Feld leer |

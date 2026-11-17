@@ -4,6 +4,8 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
+/// Accent color. The order of `ALL` is the order in the settings dropdown and the index used by
+/// the UI; the first four entries keep their old positions. `Custom` uses `Config::accent_custom`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Accent {
@@ -12,6 +14,74 @@ pub enum Accent {
     Purple,
     Green,
     Orange,
+    Red,
+    Pink,
+    Magenta,
+    Teal,
+    Cyan,
+    Yellow,
+    Lime,
+    Mint,
+    Coral,
+    Silver,
+    Indigo,
+    Sand,
+    Custom,
+}
+impl Accent {
+    pub const ALL: [Accent; 17] = [
+        Self::Blue,
+        Self::Purple,
+        Self::Green,
+        Self::Orange,
+        Self::Red,
+        Self::Pink,
+        Self::Magenta,
+        Self::Teal,
+        Self::Cyan,
+        Self::Yellow,
+        Self::Lime,
+        Self::Mint,
+        Self::Coral,
+        Self::Silver,
+        Self::Indigo,
+        Self::Sand,
+        Self::Custom,
+    ];
+    /// Dropdown index of the custom entry.
+    pub const CUSTOM_INDEX: usize = 16;
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|a| *a == self).unwrap_or(0)
+    }
+    /// Out-of-range indices fall back to the default.
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| Self::ALL.get(i).copied())
+            .unwrap_or_default()
+    }
+    /// Preset color; `None` for `Custom`.
+    pub fn rgb(self) -> Option<crate::accent::Rgb> {
+        Some(match self {
+            Self::Blue => [0x80, 0x9c, 0xff],
+            Self::Purple => [0xb0, 0x98, 0xff],
+            Self::Green => [0x64, 0xd6, 0xa4],
+            Self::Orange => [0xff, 0xb5, 0x6b],
+            Self::Red => [0xff, 0x7a, 0x7a],
+            Self::Pink => [0xff, 0x8e, 0xc7],
+            Self::Magenta => [0xe5, 0x7c, 0xf0],
+            Self::Teal => [0x4f, 0xd1, 0xc5],
+            Self::Cyan => [0x6f, 0xd0, 0xff],
+            Self::Yellow => [0xff, 0xd9, 0x66],
+            Self::Lime => [0xb5, 0xe0, 0x61],
+            Self::Mint => [0x8f, 0xe8, 0xc8],
+            Self::Coral => [0xff, 0x9a, 0x7a],
+            Self::Silver => [0xc3, 0xc9, 0xd6],
+            Self::Indigo => [0x8f, 0x8c, 0xff],
+            Self::Sand => [0xe0, 0xc9, 0xa0],
+            Self::Custom => return None,
+        })
+    }
 }
 /// Global hotkey that opens NexSearch. PowerToys Run and others often own Alt+Space, so there
 /// are alternatives; changing it re-registers at runtime.
@@ -80,6 +150,16 @@ where
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
+/// Valid hex colors are normalized to `#rrggbb`; everything else (also non-strings) becomes None.
+fn lenient_hex<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .and_then(crate::accent::parse_hex)
+        .map(crate::accent::to_hex))
+}
 fn lenient_u64<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(value.as_u64().unwrap_or(0))
@@ -100,7 +180,12 @@ fn lenient_tab<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, 
 // Unknown fields are ignored so a downgrade does not block on newer settings files.
 #[serde(default)]
 pub struct Config {
+    /// Unknown names fall back to the default accent.
+    #[serde(deserialize_with = "lenient_enum")]
     pub accent: Accent,
+    /// Color for `Accent::Custom` as `#rrggbb`; anything that is not a valid hex color is dropped.
+    #[serde(deserialize_with = "lenient_hex")]
+    pub accent_custom: Option<String>,
     pub animations: bool,
     pub close_on_focus_loss: bool,
     pub linked_displays: bool,
@@ -125,6 +210,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             accent: Accent::Blue,
+            accent_custom: None,
             animations: true,
             close_on_focus_loss: true,
             linked_displays: false,
@@ -256,6 +342,70 @@ mod tests {
         assert_eq!(load(&path).unwrap().last_tab, 4);
     }
     #[test]
+    fn accent_indices_roundtrip_and_old_ones_are_stable() {
+        for (i, a) in Accent::ALL.iter().enumerate() {
+            assert_eq!(a.index(), i);
+            assert_eq!(Accent::from_index(i as i32), *a);
+        }
+        assert_eq!(Accent::ALL[Accent::CUSTOM_INDEX], Accent::Custom);
+        assert_eq!(Accent::ALL.len(), 17);
+        assert_eq!(Accent::from_index(1), Accent::Purple);
+        assert_eq!(Accent::from_index(3), Accent::Orange);
+        assert_eq!(Accent::from_index(17), Accent::Blue);
+        assert_eq!(Accent::from_index(-1), Accent::Blue);
+    }
+    #[test]
+    fn presets_are_readable_and_distinct() {
+        use crate::accent::{MIN_CONTRAST, SURFACE, contrast};
+        let mut seen = Vec::new();
+        for a in Accent::ALL {
+            let Some(rgb) = a.rgb() else {
+                assert_eq!(a, Accent::Custom);
+                continue;
+            };
+            assert!(contrast(rgb, SURFACE) >= MIN_CONTRAST, "{a:?}");
+            assert!(!seen.contains(&rgb), "{a:?}");
+            seen.push(rgb);
+        }
+    }
+    #[test]
+    fn unknown_accent_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"accent":"unknown","autostart":true}"#).unwrap();
+        let config = load(&path).unwrap();
+        assert_eq!(config.accent, Accent::Blue);
+        assert!(config.autostart);
+    }
+    #[test]
+    fn custom_accent_roundtrips_and_is_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let config = Config {
+            accent: Accent::Custom,
+            accent_custom: Some("#12ab34".into()),
+            ..Config::default()
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).unwrap(), config);
+        std::fs::write(&path, br#"{"accent":"custom","accent_custom":"ABC"}"#).unwrap();
+        assert_eq!(
+            load(&path).unwrap().accent_custom.as_deref(),
+            Some("#aabbcc")
+        );
+    }
+    #[test]
+    fn invalid_custom_accent_is_dropped_and_old_files_have_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for raw in ["\"nope\"", "\"#12\"", "5", "null", "[1]", "\"\""] {
+            std::fs::write(&path, format!(r#"{{"accent_custom":{raw}}}"#)).unwrap();
+            assert_eq!(load(&path).unwrap().accent_custom, None, "{raw}");
+        }
+        std::fs::write(&path, br#"{"accent":"green"}"#).unwrap();
+        assert_eq!(load(&path).unwrap().accent_custom, None);
+    }
+    #[test]
     fn unknown_fields_are_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -285,11 +435,7 @@ mod tests {
     fn corrupt_or_unknown_settings_are_preserved_and_reported() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        for bytes in [
-            b"not json".as_slice(),
-            br#"{"accent":"unknown"}"#.as_slice(),
-            br#"{"autostart":"yes"}"#.as_slice(),
-        ] {
+        for bytes in [b"not json".as_slice(), br#"{"autostart":"yes"}"#.as_slice()] {
             std::fs::write(&path, bytes).unwrap();
             assert!(load(&path).is_err());
             assert_eq!(std::fs::read(&path).unwrap(), bytes);

@@ -7,7 +7,7 @@ import { Button, ScrollView, CheckBox, SpinBox, Palette } from "std-widgets.slin
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
 export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool, peak:int, peak-color:color }
 component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
-component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
+component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; height:self.preferred-height; }
 component Card inherits Rectangle { background:#252832; border-radius:8px; }
 // Label | 3px bar | value. level: 0 accent, 1 amber (>=80 %), 2 red (>=95 %).
 component StatRow inherits Rectangle {
@@ -92,6 +92,10 @@ export component MainWindow inherits Window {
  in property<bool> settings-ready:false;
  in property<bool> settings-blocked:false;
  in-out property<int> accent-index:0;
+ // Custom accent: text field content, whether it parses (empty counts as fine), last accepted `#rrggbb`
+ // and whether the accepted color had to be lightened to stay readable.
+ in-out property<string> custom-hex; in-out property<bool> custom-hex-valid:true; in-out property<string> custom-hex-saved; in property<bool> custom-adjusted:false;
+ callback custom-hex-edited(string);
  in-out property<bool> animations:true;
  in-out property<bool> focus-close:true;
  in-out property<bool> linked:false;
@@ -110,7 +114,9 @@ export component MainWindow inherits Window {
  in-out property<bool> dropdown-open:false;
  // Tooltip state; `HoverTip` at the end of the window draws it.
  property<string> tip-text; property<length> tip-x; property<length> tip-y; property<length> tip-h; in-out property<bool> tip-visible:false;
- property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
+ property<[string]> accent-names:[@tr("Blau"),@tr("Violett"),@tr("Grün"),@tr("Orange"),@tr("Rot"),@tr("Rosa"),@tr("Magenta"),@tr("Türkis"),@tr("Cyan"),@tr("Gelb"),@tr("Limette"),@tr("Mint"),@tr("Koralle"),@tr("Silber"),@tr("Indigo"),@tr("Sand"),@tr("Eigene …")];
+ // One color per accent-names entry (last = custom color); set by Rust, readability already ensured there.
+ in property<[color]> accent-dots;
  property<[string]> hotkey-names:["Alt+Leertaste","Strg+Alt+Leertaste","Win+Alt+Leertaste"];
  property<[string]> position-names:["Mitte","Oben"];
  property<string> update-error-text:
@@ -137,6 +143,12 @@ export component MainWindow inherits Window {
  in-out property<int> hotkey-index:0; in-out property<int> position-index:0;
  in-out property<int> dropdown-kind:0;
  property<length> dd-x; property<length> dd-y; property<length> dd-w;
+ // Scroll offset of the settings ScrollView (shared via two-way binding) and its value when the list was opened.
+ property<length> scroll-y; property<length> dd-scroll0;
+ // List anchor (field bottom + 4px) following the scrolled field; list closes once the field leaves the scroll area.
+ property<length> dd-live-y: root.dd-y + root.scroll-y - root.dd-scroll0;
+ property<bool> dd-in-view: !root.dropdown-open || (root.dd-live-y - 40px >= tab-sep.absolute-position.y + 1px && root.dd-live-y - 4px <= root.height - 10px);
+ changed dd-in-view => { if !root.dd-in-view { root.dropdown-open=false; } }
  in property<string> countdown-text:"00:05:00";
  in property<string> stopwatch-text:"00:00:00";
  in property<bool> countdown-running:false;
@@ -145,9 +157,9 @@ export component MainWindow inherits Window {
  in property<bool> countdown-active:false;
  in-out property<int> time-seg:2;
  in property<string> input-h:"00"; in property<string> input-m:"05"; in property<string> input-s:"00";
- out property<color> accent:accent-index==1?#b098ff:accent-index==2?#64d6a4:accent-index==3?#ffb56b:#809cff;
+ out property<color> accent:root.accent-index>=0&&root.accent-index<root.accent-dots.length?root.accent-dots[root.accent-index]:#809cff;
  function show-tip(t:string,x:length,y:length,h:length,s:bool){root.tip-text=t;root.tip-x=x;root.tip-y=y;root.tip-h=h;root.tip-visible=s;}
- changed tab => { root.tip-visible=false; }
+ changed tab => { root.tip-visible=false; root.scroll-y=0px; }
  callback hide-panel(); callback refresh-display(); callback refresh-audio();
  callback brightness(string,int); callback volume(string,int); callback mute(string,bool);
  callback time-digit(int); callback time-backspace(bool); callback time-step(int,int);
@@ -165,7 +177,7 @@ export component MainWindow inherits Window {
  HorizontalLayout {spacing:4px;
  for label[i] in ["Audio","Displays","System","Zeit","Einstellungen"]: TabButton {text:label; active:root.tab==i; accent:root.accent; clicked=>{root.tab=i;}}
  }
- Rectangle {height:1px;background:#343640;}
+ tab-sep := Rectangle {height:1px;background:#343640;}
  if root.tab==0: VerticalLayout {vertical-stretch:1;spacing:6px;
  HorizontalLayout {height:26px;padding-left:4px;padding-right:4px;
  Text{text:root.audio-device;color:#f3f4f8;font-size:13px;horizontal-stretch:1;overflow:elide;vertical-alignment:center;}
@@ -196,8 +208,8 @@ export component MainWindow inherits Window {
  }
  }
  }
- if root.tab!=0: ScrollView {vertical-stretch:1;
- VerticalLayout {spacing:8px;alignment:start; padding-right:6px;
+ if root.tab!=0: ScrollView {vertical-stretch:1;content-y<=>root.scroll-y;
+ VerticalLayout {spacing:8px;alignment:start; padding-right:6px; padding-bottom:12px;
  if root.tab==1: VerticalLayout {spacing:6px;alignment:start;
  HorizontalLayout {height:26px;padding-left:4px;spacing:6px;
  Text{text:"Helligkeit";color:#f3f4f8;font-size:13px;horizontal-stretch:1;vertical-alignment:center;}
@@ -274,7 +286,18 @@ export component MainWindow inherits Window {
  if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"AKZENTFARBE";}
- Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.accent-names;dots:root.accent-dots;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
+ if root.accent-index==16: VerticalLayout{spacing:4px;
+  HorizontalLayout{spacing:8px;height:36px;
+   Rectangle{width:36px;border-radius:8px;background:root.accent-dots[16];border-width:1px;border-color:#343640;}
+   Rectangle{horizontal-stretch:1;border-radius:8px;background:#1b1d25;border-width:1px;border-color:!root.custom-hex-valid?#ff6b6b:hexinput.has-focus?#809cff:#343640;
+    if root.custom-hex=="": Text{x:12px;text:@tr("#RRGGBB");color:#6f768a;font-size:13px;vertical-alignment:center;}
+    hexinput := TextInput{x:12px;width:parent.width - 24px;text<=>root.custom-hex;color:#f3f4f8;font-size:13px;single-line:true;vertical-alignment:center;enabled:root.settings-ready;selection-background-color:root.accent;selection-foreground-color:#14161c;edited=>{root.custom-hex-edited(self.text);}}
+   }
+  }
+  if !root.custom-hex-valid: Hint{text:@tr("Ungültig: erwartet #RRGGBB oder #RGB.");color:#ff9a9a;font-size:11px;}
+  if root.custom-hex-valid&&root.custom-adjusted: Hint{text:@tr("Zu dunkel, wird für die Lesbarkeit aufgehellt.");font-size:11px;}
+ }
  CheckBox{text:"Animationen";checked:root.animations;enabled:root.settings-ready;toggled=>{root.animations=self.checked;root.save-settings();}}
  CheckBox{text:"Bei Fokusverlust ausblenden";checked:root.focus-close;enabled:root.settings-ready;toggled=>{root.focus-close=self.checked;root.save-settings();}}
  CheckBox{text:"Displayhelligkeit koppeln";checked:root.linked;enabled:root.settings-ready;toggled=>{root.linked=self.checked;root.save-settings();}}
@@ -282,15 +305,15 @@ export component MainWindow inherits Window {
  }}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"NEXSEARCH-HOTKEY";}
- Dropdown{model:root.hotkey-names;current-index:root.hotkey-index;open:root.dropdown-open&&root.dropdown-kind==1;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=1;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.hotkey-names;current-index:root.hotkey-index;open:root.dropdown-open&&root.dropdown-kind==1;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=1;root.dropdown-open=!root.dropdown-open;}}
  if root.hotkey-status!="": Hint{text:root.hotkey-status;color:root.hotkey-warning?#ffbc91:#979eaf;}
  Hint{text:"SUCHFENSTER-POSITION";}
- Dropdown{model:root.position-names;current-index:root.position-index;open:root.dropdown-open&&root.dropdown-kind==2;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=2;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.position-names;current-index:root.position-index;open:root.dropdown-open&&root.dropdown-kind==2;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=2;root.dropdown-open=!root.dropdown-open;}}
  }}
  Card{VerticalLayout{padding:14px;spacing:10px;
  Hint{text:@tr("UPDATES");}
- Text{text:@tr("Installierte Version: {}", root.app-version);color:#f3f4f8;font-size:13px;wrap:word-wrap;}
- Text{text:root.update-status-text;color:root.update-state==8?#ffbc91:#b6bdcc;font-size:12px;wrap:word-wrap;}
+ Text{text:@tr("Installierte Version: {}", root.app-version);color:#f3f4f8;font-size:13px;wrap:word-wrap;height:self.preferred-height;}
+ Text{text:root.update-status-text;color:root.update-state==8?#ffbc91:#b6bdcc;font-size:12px;wrap:word-wrap;height:self.preferred-height;}
  if root.update-state==3&&!root.update-managed: Hint{text:@tr("Diese Installation wurde nicht mit install.ps1 eingerichtet; bitte das Paket manuell installieren.");font-size:11px;}
  if root.update-state==8&&root.update-error-detail!="": Hint{text:root.update-error-detail;font-size:11px;}
  if root.update-state==4: Rectangle{height:6px;border-radius:3px;background:#343640;
@@ -304,12 +327,12 @@ export component MainWindow inherits Window {
  }}
  Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
  Button{text:"Einstellungen zurücksetzen";enabled:root.settings-ready;clicked=>{root.reset-settings();}}
- Hint{text:"NexPanel 0.1 · Windows 11\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
+ Hint{text:@tr("NexPanel {} · Windows 11", root.app-version)+"\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
  }
  }
  }
  }
- if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y;list-width:root.dd-w;
+ if root.dropdown-open: DropdownList{dots:root.dropdown-kind==0?root.accent-dots:[];model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-live-y;list-width:root.dd-w;
   chosen(i)=>{
    if root.dropdown-kind==1 { root.hotkey-index=i; } else if root.dropdown-kind==2 { root.position-index=i; } else { root.accent-index=i; }
    root.dropdown-open=false;root.save-settings();}
