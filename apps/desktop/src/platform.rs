@@ -380,6 +380,31 @@ pub fn write_autostart(_: bool) -> std::io::Result<()> {
     Err(std::io::Error::other("Autostart benötigt Windows"))
 }
 
+/// Blocks until process `pid` has exited, at most `timeout`. Returns `true` when it is gone
+/// (also when it cannot be opened, i.e. no longer exists) and `false` on timeout. Used by a
+/// freshly started update instance to wait for the old one to release the single-instance mutex.
+#[cfg(windows)]
+pub fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) -> bool {
+    use windows::Win32::{
+        Foundation::{CloseHandle, WAIT_TIMEOUT},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    // SAFETY: the handle is used only for the wait and closed afterwards.
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
+            return true;
+        };
+        let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
+        let result = WaitForSingleObject(process, millis);
+        let _ = CloseHandle(process);
+        result != WAIT_TIMEOUT
+    }
+}
+#[cfg(not(windows))]
+pub fn wait_for_process_exit(_: u32, _: std::time::Duration) -> bool {
+    true
+}
+
 /// The named objects are scoped to the current Windows logon session.
 #[cfg(windows)]
 pub struct Instance {
@@ -615,5 +640,40 @@ mod tests {
             autostart_command(r"C:\Program Files\NexPanel\nexpanel.exe"),
             r#""C:\Program Files\NexPanel\nexpanel.exe" --background"#
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod wait_tests {
+    use super::wait_for_process_exit;
+    use std::{
+        process::{Command, Stdio},
+        time::Duration,
+    };
+
+    #[test]
+    fn waits_for_a_running_process_and_returns_once_it_has_exited() {
+        let mut child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("ping is part of Windows");
+        let pid = child.id();
+        assert!(
+            !wait_for_process_exit(pid, Duration::from_millis(150)),
+            "a running process times out"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(wait_for_process_exit(pid, Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn unknown_process_counts_as_gone() {
+        // PID 0xFFFF_FFF0 cannot exist; OpenProcess fails and there is nothing to wait for.
+        assert!(wait_for_process_exit(
+            0xFFFF_FFF0,
+            Duration::from_millis(50)
+        ));
     }
 }

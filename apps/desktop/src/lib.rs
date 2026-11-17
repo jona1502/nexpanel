@@ -13,3 +13,4 @@ pub mod time_input;
 pub mod time_tools;
 pub mod tray;
 pub mod ui_models;
+pub mod update;

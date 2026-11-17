@@ -39,12 +39,12 @@ component TimeSeg inherits Rectangle {
   scroll-event(e) => { if e.delta-y > 0 { root.scrolled(1); } else if e.delta-y < 0 { root.scrolled(-1); } return accept; }}
 }
 component ActionButton inherits Rectangle {
- in property<string> text; in property<bool> primary:false;
+ in property<string> text; in property<bool> primary:false; in property<bool> enabled:true;
  callback clicked();
- height:30px; horizontal-stretch:1; border-radius:6px;
+ height:30px; horizontal-stretch:1; border-radius:6px; opacity:root.enabled?1:0.45;
  background:root.primary?(ta.has-hover?#9bb2ff:#809cff):(ta.has-hover?#343640:#2b2e39);
  Text{text:root.text;color:root.primary?#14161c:#f3f4f8;font-size:13px;font-weight:600;horizontal-alignment:center;vertical-alignment:center;}
- ta := TouchArea{mouse-cursor:pointer;clicked=>{root.clicked();}}
+ ta := TouchArea{enabled:root.enabled;mouse-cursor:pointer;clicked=>{root.clicked();}}
 }
 // Speaker glyph; `muted` swaps the sound waves for a cross. 16x16 viewbox, crisp at any scale.
 component SpeakerIcon inherits Rectangle {
@@ -96,6 +96,16 @@ export component MainWindow inherits Window {
  in-out property<bool> focus-close:true;
  in-out property<bool> linked:false;
  in-out property<bool> autostart:false;
+ in-out property<bool> auto-update-check:true;
+ // Update state, see `update::machine::State::code` and `ErrorKind::code`.
+ in property<int> update-state:0;
+ in property<string> update-version;
+ in property<int> update-progress:-1;
+ in property<int> update-error-kind:0;
+ in property<string> update-error-detail;
+ in property<bool> update-managed:true;
+ in property<bool> update-busy:false;
+ in property<bool> update-can-install:false;
  // True while a dropdown list is open; Rust sets it to false to close it (Esc, panel hide).
  in-out property<bool> dropdown-open:false;
  // Tooltip state; `HoverTip` at the end of the window draws it.
@@ -103,6 +113,27 @@ export component MainWindow inherits Window {
  property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
  property<[string]> hotkey-names:["Alt+Leertaste","Strg+Alt+Leertaste","Win+Alt+Leertaste"];
  property<[string]> position-names:["Mitte","Oben"];
+ property<string> update-error-text:
+  root.update-error-kind==1?@tr("Keine Verbindung zu GitHub."):
+  root.update-error-kind==2?@tr("Verbindung abgelehnt: unerlaubte Adresse."):
+  root.update-error-kind==3?@tr("Der Download ist größer als erlaubt."):
+  root.update-error-kind==4?@tr("Prüfsumme stimmt nicht überein, das Update wurde verworfen."):
+  root.update-error-kind==5?@tr("Das Paket ist ungültig, das Update wurde verworfen."):
+  root.update-error-kind==6?@tr("Die Version im Paket passt nicht zum Release, das Update wurde verworfen."):
+  root.update-error-kind==7?@tr("Diese Installation kann nicht automatisch aktualisiert werden (nicht mit install.ps1 installiert)."):
+  root.update-error-kind==8?@tr("Keine Schreibrechte im Installationsordner."):
+  root.update-error-kind==9?@tr("Die Installation ist fehlgeschlagen, die bisherige Version bleibt erhalten."):
+  root.update-error-kind==10?@tr("Update installiert, aber NexPanel konnte nicht neu gestartet werden. Bitte manuell starten."):
+  @tr("Das Update ist fehlgeschlagen.");
+ property<string> update-status-text:
+  root.update-state==1?@tr("Suche nach Updates …"):
+  root.update-state==2?@tr("NexPanel ist aktuell."):
+  root.update-state==3?@tr("Version {} ist verfügbar.", root.update-version):
+  root.update-state==4?@tr("Lade Version {} herunter …", root.update-version):
+  root.update-state==5?@tr("Prüfe Download …"):
+  root.update-state==6||root.update-state==7?@tr("Installiere Version {} …", root.update-version):
+  root.update-state==8?root.update-error-text:
+  @tr("Noch nicht geprüft.");
  in-out property<int> hotkey-index:0; in-out property<int> position-index:0;
  in-out property<int> dropdown-kind:0;
  property<length> dd-x; property<length> dd-y; property<length> dd-w;
@@ -120,6 +151,7 @@ export component MainWindow inherits Window {
  callback hide-panel(); callback refresh-display(); callback refresh-audio();
  callback brightness(string,int); callback volume(string,int); callback mute(string,bool);
  callback time-digit(int); callback time-backspace(bool); callback time-step(int,int);
+ callback check-updates(); callback install-update();
  callback save-settings(); callback reset-settings(); callback countdown-action(int); callback stopwatch-action(int);
  VerticalLayout {
  padding:10px; spacing:8px;
@@ -254,6 +286,21 @@ export component MainWindow inherits Window {
  if root.hotkey-status!="": Hint{text:root.hotkey-status;color:root.hotkey-warning?#ffbc91:#979eaf;}
  Hint{text:"SUCHFENSTER-POSITION";}
  Dropdown{model:root.position-names;current-index:root.position-index;open:root.dropdown-open&&root.dropdown-kind==2;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=2;root.dropdown-open=!root.dropdown-open;}}
+ }}
+ Card{VerticalLayout{padding:14px;spacing:10px;
+ Hint{text:@tr("UPDATES");}
+ Text{text:@tr("Installierte Version: {}", root.app-version);color:#f3f4f8;font-size:13px;wrap:word-wrap;}
+ Text{text:root.update-status-text;color:root.update-state==8?#ffbc91:#b6bdcc;font-size:12px;wrap:word-wrap;}
+ if root.update-state==3&&!root.update-managed: Hint{text:@tr("Diese Installation wurde nicht mit install.ps1 eingerichtet; bitte das Paket manuell installieren.");font-size:11px;}
+ if root.update-state==8&&root.update-error-detail!="": Hint{text:root.update-error-detail;font-size:11px;}
+ if root.update-state==4: Rectangle{height:6px;border-radius:3px;background:#343640;
+  Rectangle{x:0px;width:root.update-progress<0?parent.width*0.15:parent.width*max(0,min(100,root.update-progress))/100;height:6px;border-radius:3px;background:root.accent;}}
+ CheckBox{text:@tr("Automatisch prüfen (täglich)");checked:root.auto-update-check;enabled:root.settings-ready;toggled=>{root.auto-update-check=self.checked;root.save-settings();}}
+ HorizontalLayout{spacing:8px;
+  ActionButton{text:@tr("Jetzt prüfen");enabled:!root.update-busy;clicked=>{root.check-updates();}}
+  if root.update-can-install: ActionButton{text:@tr("Jetzt aktualisieren");primary:true;enabled:!root.update-busy;clicked=>{root.install-update();}}
+ }
+ Hint{text:@tr("Versionen werden von GitHub geladen. Die Pakete sind nicht signiert; die SHA256-Prüfsumme stammt aus demselben Release und belegt nur einen vollständigen Download, nicht die Herkunft. Beim Aktualisieren startet NexPanel neu, laufende Timer werden zurückgesetzt.");font-size:11px;}
  }}
  Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
  Button{text:"Einstellungen zurücksetzen";enabled:root.settings-ready;clicked=>{root.reset-settings();}}
