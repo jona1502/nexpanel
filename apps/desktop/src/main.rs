@@ -411,7 +411,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))?;
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     let (dtx, drx, display_crashed) = services::display::spawn();
-    let (atx, arx, audio_crashed) = services::audio::spawn();
+    let (atx, arx, _audio_peaks, audio_crashed) = services::audio::spawn();
     let (ytx, yrx, system_crashed) = services::system::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
     // Last tab written to settings.json (or loaded from it); see `save_tab_if_changed`.
