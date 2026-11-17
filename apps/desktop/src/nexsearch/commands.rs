@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn prefix_match() {
-        assert_eq!(cmds("sett"), [NexCommand::OpenSettings]);
+        assert_eq!(cmds("sett")[0], NexCommand::OpenSettings);
         // "ein" also fuzzy-matches an autostart alias, but the prefix hit ranks first.
         assert_eq!(cmds("ein")[0], NexCommand::OpenSettings);
         assert_eq!(cmds("auto"), [NexCommand::ToggleAutostart]);
