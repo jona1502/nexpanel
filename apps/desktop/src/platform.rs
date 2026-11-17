@@ -380,6 +380,31 @@ pub fn write_autostart(_: bool) -> std::io::Result<()> {
     Err(std::io::Error::other("Autostart benötigt Windows"))
 }
 
+/// Blocks until process `pid` has exited, at most `timeout`. Returns `true` when it is gone
+/// (also when it cannot be opened, i.e. no longer exists) and `false` on timeout. Used by a
+/// freshly started update instance to wait for the old one to release the single-instance mutex.
+#[cfg(windows)]
+pub fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) -> bool {
+    use windows::Win32::{
+        Foundation::{CloseHandle, WAIT_TIMEOUT},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    // SAFETY: the handle is used only for the wait and closed afterwards.
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else {
+            return true;
+        };
+        let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
+        let result = WaitForSingleObject(process, millis);
+        let _ = CloseHandle(process);
+        result != WAIT_TIMEOUT
+    }
+}
+#[cfg(not(windows))]
+pub fn wait_for_process_exit(_: u32, _: std::time::Duration) -> bool {
+    true
+}
+
 /// The named objects are scoped to the current Windows logon session.
 #[cfg(windows)]
 pub struct Instance {
