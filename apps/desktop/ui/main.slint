@@ -284,7 +284,7 @@ export component MainWindow inherits Window {
  }}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"NEXSEARCH-HOTKEY";}
- Dropdown{model:root.hotkey-names;current-index:root.hotkey-index;open:root.dropdown-open&&root.dropdown-kind==1;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=1;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.hotkey-names;current-index:root.hotkey-index;open:root.dropdown-open&&root.dropdown-kind==1;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dd-scroll0=root.scroll-y;root.dropdown-kind=1;root.dropdown-open=!root.dropdown-open;}}
  if root.hotkey-status!="": Hint{text:root.hotkey-status;color:root.hotkey-warning?#ffbc91:#979eaf;}
  Hint{text:"SUCHFENSTER-POSITION";}
  Dropdown{model:root.position-names;current-index:root.position-index;open:root.dropdown-open&&root.dropdown-kind==2;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=2;root.dropdown-open=!root.dropdown-open;}}
@@ -311,7 +311,7 @@ export component MainWindow inherits Window {
  }
  }
  }
- if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y+(root.dropdown-kind==0?root.scroll-y - root.dd-scroll0:0px);list-width:root.dd-w;
+ if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y+(root.dropdown-kind<=1?root.scroll-y - root.dd-scroll0:0px);list-width:root.dd-w;
   chosen(i)=>{
    if root.dropdown-kind==1 { root.hotkey-index=i; } else if root.dropdown-kind==2 { root.position-index=i; } else { root.accent-index=i; }
    root.dropdown-open=false;root.save-settings();}
