@@ -10,7 +10,7 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 - [x] **Tray-Icon nach Explorer-Neustart:** Slints `SystemTrayIcon` (1.18.1) nutzt ein
   `HWND_MESSAGE`-Fenster, das den Broadcast `TaskbarCreated` nicht empfängt. Das Icon
   bleibt danach verschwunden. Fix: eigener Win32-Tray-Host gemäß ADR-001.
-- [ ] **Slider-Drag:** Audio sendet jede Sekunde einen Snapshot, Display nach jedem Schreibvorgang.
+- [x] **Slider-Drag (erledigt via `ui_models::reconcile`, vorher manuell bestätigen):** Audio sendet jede Sekunde einen Snapshot, Display nach jedem Schreibvorgang.
   `main.rs` setzt dann jedes Mal ein neues `VecModel`, wodurch ein laufender Drag vermutlich
   abbricht. Fix: nur bei Änderung senden und das Modell inkrementell aktualisieren
   (`set_row_data`). Vorher manuell bestätigen.
@@ -50,3 +50,14 @@ Erledigte Punkte abhaken und auf den PR verweisen.
 
 DDC/CI auf drei externen Monitoren: siehe [spikes/ddc/RESULTS.md](../spikes/ddc/RESULTS.md).
 Lesen und Setzen dauern je ca. 62 ms, der Capabilities-String 1–5 s.
+
+## Phase 2 – NexSearch (17.11.2026)
+
+- [x] Kern: Engine, Rechner, Command-Provider (DE/EN-Aliase)
+- [x] App-Launcher: Startmenü-`.lnk` plus `shell:AppsFolder` (Store-Apps)
+- [x] Globaler Hotkey (Alt+Leertaste, Strg+Alt+Leertaste, Win+Alt+Leertaste) mit Konfliktbehandlung
+- [x] Suchfenster auf dem Monitor mit dem Mauszeiger, Position Mitte/Oben
+- [x] Audio-Pegelbalken pro App
+- [ ] Praktische Tests (docs/testing.md S1–S18, Pegelbalken mit echtem Ton, Multi-Monitor-DPI)
+- [ ] Command-Titel (Settings, Quit) lokalisieren
+- [ ] Filter für Spiele/Systemeinträge im Launcher (Entscheidung offen)
