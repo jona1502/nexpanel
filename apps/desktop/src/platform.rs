@@ -642,3 +642,38 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, windows))]
+mod wait_tests {
+    use super::wait_for_process_exit;
+    use std::{
+        process::{Command, Stdio},
+        time::Duration,
+    };
+
+    #[test]
+    fn waits_for_a_running_process_and_returns_once_it_has_exited() {
+        let mut child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("ping is part of Windows");
+        let pid = child.id();
+        assert!(
+            !wait_for_process_exit(pid, Duration::from_millis(150)),
+            "a running process times out"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(wait_for_process_exit(pid, Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn unknown_process_counts_as_gone() {
+        // PID 0xFFFF_FFF0 cannot exist; OpenProcess fails and there is nothing to wait for.
+        assert!(wait_for_process_exit(
+            0xFFFF_FFF0,
+            Duration::from_millis(50)
+        ));
+    }
+}
