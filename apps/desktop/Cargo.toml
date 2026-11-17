@@ -14,11 +14,13 @@ serde_json = "1"
 log = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
+# Raw deflate for the update package; already in the dependency tree via png/image.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 
 [target.'cfg(windows)'.dependencies]
 wmi = "=0.18.4"
 winreg = "0.55"
-windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Devices_Display", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_Diagnostics_Debug", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_Devices_FunctionDiscovery", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_SystemInformation", "Win32_Graphics_Dxgi", "Win32_System_DataExchange", "Win32_System_Memory"] }
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Devices_Display", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_System_Diagnostics_Debug", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_Devices_FunctionDiscovery", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_SystemInformation", "Win32_Graphics_Dxgi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_Networking_WinHttp"] }
 # Needed by the `#[implement]` macro (COM callbacks); same version as `windows`.
 windows-core = "=0.62.2"
 

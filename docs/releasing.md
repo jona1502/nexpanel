@@ -27,3 +27,40 @@ Releases entstehen über den Workflow `.github/workflows/release.yml` (Windows, 
 - [ ] Handtests aus `docs/testing.md` durchgeführt.
 - [ ] Signierung entschieden: unsigniert (SmartScreen-Warnung) oder Zertifikat.
 - [ ] Statusformulierung in `README.md` angepasst (kein „lokal, nicht gepusht“ mehr).
+
+## Auto-Updater
+
+NexPanel kann sich selbst aktualisieren (Einstellungen → Updates). Der Updater arbeitet nur mit dem hier beschriebenen Release-Format; ändert sich Paketname, Inhalt oder Prüfsummenformat, muss `apps/desktop/src/update/` angepasst werden.
+
+### Was der Updater tut
+
+- Prüft beim Start und danach höchstens einmal in 24 Stunden (Schalter „Automatisch prüfen (täglich)“, Standard an; Zeitstempel `last_update_check` in `settings.json`) sowie auf Klick bei „Jetzt prüfen“. Die Prüfung liest `https://api.github.com/repos/jona1502/nexpanel/releases` und nimmt die höchste Version, die neuer als die laufende ist. **Pre-Releases zählen mit** (alle Versionen unter 1.0 sind Pre-Releases). Entwürfe sind für den Updater unsichtbar.
+- Lädt und installiert **nie von selbst**: Erst der Klick auf „Jetzt aktualisieren“ startet Download, Prüfung, Installation und Neustart. Beim Neustart gehen laufende Timer verloren (der Timerzustand wird ohnehin nicht über App-Neustarts gespeichert).
+- Ersetzt nur Installationen aus `scripts/install.ps1` (Ordner mit passender `.nexpanel-install.json`). Ein Entwicklungs-Build oder ein kopierter Ordner bekommt den Hinweis „nicht mit install.ps1 eingerichtet“ und kann nur prüfen.
+
+### Anforderungen an ein Release
+
+Damit ein Release für den Updater sichtbar ist, müssen beide Anhänge exakt so heißen (Tag `vX.Y.Z[-pre]`, `X.Y.Z[-pre]` ist die Version):
+
+| Anhang | Inhalt |
+|---|---|
+| `nexpanel-X.Y.Z-windows-x64.zip` | Von `scripts/package.ps1`: `nexpanel.exe`, `install.ps1`, `uninstall.ps1`, `README.md`, `THIRD-PARTY-NOTICES.md`, `VERSION.txt`, alles flach ohne Unterordner |
+| `nexpanel-X.Y.Z-windows-x64.zip.sha256` | Eine Zeile `<sha256-hex>  <Dateiname>` (Ausgabe von `package.ps1`) |
+
+Der Updater lehnt ab: Zip mit Pfadanteilen, `..`, Laufwerken oder Streams im Dateinamen (Zip-Slip), fehlendes `nexpanel.exe` oder `VERSION.txt`, `VERSION.txt` ungleich der Release-Version, Version nicht neuer als die laufende (kein Downgrade), Download über 100 MiB, falsche oder fremde Prüfsumme. Die Download-URLs werden aus dem Tag gebildet, nicht aus der API-Antwort übernommen.
+
+### Netzwerk
+
+Nur HTTPS, nur diese Hosts (exakt; Weiterleitungen werden einzeln geprüft, höchstens 5): `api.github.com` (Release-Liste), `github.com` (Download-URL), `objects.githubusercontent.com` und `release-assets.githubusercontent.com` (Ziel der GitHub-Weiterleitung für Release-Anhänge). Umsetzung mit WinHTTP (keine zusätzliche Abhängigkeit), alles im Hintergrund-Thread, Timeouts je Schritt, Gesamtfrist 30 s für die Liste und 10 min für das Paket. Übertragen werden die Anfrage-URL, die IP-Adresse und der Kopf `User-Agent: NexPanel-Updater/<Version>`; keine Kennung, keine Telemetrie. Wer keine Abfrage bei GitHub will, schaltet „Automatisch prüfen“ aus und klickt nie auf „Jetzt prüfen“.
+
+### Sicherheitshinweis
+
+- Die Releases sind **nicht signiert**. Die SHA256-Prüfsumme liegt im selben Release wie das Zip. Sie beweist deshalb nur, dass der Download vollständig und unverändert angekommen ist, **nicht**, dass das Release echt ist: Wer das Release (oder das GitHub-Konto) kontrolliert, kann Zip und Prüfsumme gemeinsam austauschen. Authentizität gäbe erst eine Signatur (Authenticode oder minisign) mit einem fest eingebauten öffentlichen Schlüssel; das ist eine offene Entscheidung (siehe „Signierung“ oben).
+- Vom Updater geschriebene Dateien tragen keine Mark-of-the-Web-Kennzeichnung; SmartScreen warnt beim Neustart daher nicht.
+- Der Hinweistext im Updates-Abschnitt der Einstellungen sagt dasselbe über die Prüfsumme.
+
+### Austausch der laufenden Datei
+
+Die laufende `nexpanel.exe` kann unter Windows umbenannt, aber nicht überschrieben oder gelöscht werden. Ablauf: alle Dateien als `<Name>.new` schreiben (fehlende Schreibrechte fallen hier auf, ohne etwas zu verändern), dann je Datei `<Name>` → `<Name>.old` und `<Name>.new` → `<Name>`, die `nexpanel.exe` zuletzt. Jeder Fehler macht alle bereits erfolgten Umbenennungen rückgängig. Danach startet die neue exe mit `--wait-pid <PID>` und wartet bis zu 15 s, bis die alte beendet ist (Single-Instance-Mutex); die alte beendet sich über denselben Weg wie „Beenden“ im Tray-Menü. `nexpanel.exe.old` wird beim nächsten Start gelöscht. `.nexpanel-install.json` erhält die neue Version.
+
+Bleibt nach einem Fehler etwas liegen (`*.old`, `*.new` im Installationsordner), räumt der nächste Start auf. Bei einer unvollständigen Rücknahme meldet der Updater das und empfiehlt eine Neuinstallation per `install.ps1`.
