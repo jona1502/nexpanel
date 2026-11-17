@@ -313,12 +313,8 @@ fn dispatch(app: &MainWindow, popup: &RefCell<Popup>, event: Event, ms: u64) {
 }
 fn config_from(app: &MainWindow) -> Config {
     Config {
-        accent: match app.get_accent_index() {
-            1 => Accent::Purple,
-            2 => Accent::Green,
-            3 => Accent::Orange,
-            _ => Accent::Blue,
-        },
+        accent: Accent::from_index(app.get_accent_index()),
+        accent_custom: None,
         animations: app.get_animations(),
         close_on_focus_loss: app.get_focus_close(),
         linked_displays: app.get_linked(),
@@ -332,12 +328,7 @@ fn config_from(app: &MainWindow) -> Config {
     }
 }
 fn apply_config(app: &MainWindow, c: &Config) {
-    app.set_accent_index(match c.accent {
-        Accent::Blue => 0,
-        Accent::Purple => 1,
-        Accent::Green => 2,
-        Accent::Orange => 3,
-    });
+    app.set_accent_index(c.accent.index() as i32);
     app.set_animations(c.animations);
     app.set_focus_close(c.close_on_focus_loss);
     app.set_linked(c.linked_displays);
