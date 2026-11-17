@@ -1,6 +1,7 @@
 //! App launcher provider: indexes Start menu shortcuts in a background thread
 //! and matches them by name prefix, word start or fuzzy subsequence.
 //!
+//! Sources: Start menu `.lnk` files and `shell:AppsFolder` (Store apps).
 //! The `.lnk` file itself is launched (ShellExecute handles it), so no COM
 //! shortcut resolution is needed.
 
@@ -20,6 +21,24 @@ pub struct AppEntry {
 pub trait AppSource: Send + Sync + 'static {
     /// May block (file system walk). Never call on the UI thread.
     fn scan(&self) -> Vec<AppEntry>;
+}
+
+/// Concatenates several sources in priority order; [`build_index`] keeps the first entry per
+/// name, so earlier sources win duplicates.
+pub struct CombinedSource {
+    sources: Vec<Box<dyn AppSource>>,
+}
+
+impl CombinedSource {
+    pub fn new(sources: Vec<Box<dyn AppSource>>) -> Self {
+        Self { sources }
+    }
+}
+
+impl AppSource for CombinedSource {
+    fn scan(&self) -> Vec<AppEntry> {
+        self.sources.iter().flat_map(|s| s.scan()).collect()
+    }
 }
 
 /// Scans Start menu `.lnk` files below the given roots recursively.
@@ -170,9 +189,14 @@ impl LauncherProvider {
         Self { index }
     }
 
-    /// Start menu launcher for the current user.
+    /// Launcher for the current user: `shell:AppsFolder` (Store and classic apps) first, then
+    /// Start menu `.lnk` files. On duplicate names the AppsFolder entry wins: it launches via
+    /// the AppUserModelID, which also works for Store apps and never points at a stale `.lnk`.
     pub fn start_menu() -> Self {
-        Self::spawn(StartMenuSource::from_env())
+        Self::spawn(CombinedSource::new(vec![
+            Box::new(super::appsfolder::AppsFolderSource),
+            Box::new(StartMenuSource::from_env()),
+        ]))
     }
 
     /// Whether the background index is ready.
@@ -297,6 +321,34 @@ mod tests {
             r[0].action,
             SearchAction::Launch(PathBuf::from("C:\\one.lnk"))
         );
+    }
+
+    #[test]
+    fn combined_source_prefers_earlier_source() {
+        struct Fixed(Vec<AppEntry>);
+        impl AppSource for Fixed {
+            fn scan(&self) -> Vec<AppEntry> {
+                self.0.clone()
+            }
+        }
+        let mut first = app("Spotify");
+        first.path = PathBuf::from("shell:AppsFolder\\X!Spotify");
+        let mut second = app("spotify");
+        second.path = PathBuf::from(r"C:\s.lnk");
+        let p = LauncherProvider::spawn(CombinedSource::new(vec![
+            Box::new(Fixed(vec![first, app("Only Store")])),
+            Box::new(Fixed(vec![second, app("Only Lnk")])),
+        ]));
+        while !p.is_ready() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let r = p.query("spot");
+        assert_eq!(r.len(), 1);
+        assert_eq!(
+            r[0].action,
+            SearchAction::Launch(PathBuf::from("shell:AppsFolder\\X!Spotify"))
+        );
+        assert_eq!(p.query("only").len(), 2);
     }
 
     #[test]

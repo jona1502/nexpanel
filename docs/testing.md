@@ -288,3 +288,7 @@ Einstellungen (Tab „Einstellungen“, Karte „NexSearch“): Hotkey Alt+Leert
 | S18 | Panel offen (Tray), dann Hotkey | Panel schließt durch Fokusverlust, Suchfenster öffnet |
 
 Bei Fokus-Verweigerung durch Windows (Vordergrundsperre) schließt sich das Suchfenster nach etwa 0,4 s selbst, statt auf dem Bildschirm hängen zu bleiben. Ein Smoke-Test mit synthetischen Tastendrücken (Hotkey, Tippen, Fensterhöhe 56 → 101 → 453 px, Esc, Umschalten, Position „Oben“ aus `settings.json`) lief auf einem Debug-Build; Dropdown-Auswahl per Maus und mehrere Monitore sind nicht automatisiert geprüft.
+
+## NexSearch: Launcher mit shell:AppsFolder (agent/launcher-appsfolder)
+
+Der Launcher indexiert zusätzlich den virtuellen Ordner `shell:AppsFolder` (Store-/UWP-Apps wie Spotify und klassische Apps) neben den Startmenü-`.lnk`-Dateien. Start über `ShellExecuteW` mit `shell:AppsFolder\<AppUserModelID>`. Bei gleichem Namen gewinnt der AppsFolder-Eintrag (startet zuverlässig über die AppUserModelID). Die Aufzählung läuft mit eigenem COM-Init im Index-Thread. Kombination/Deduplizierung ist per Mock getestet (`combined_source_prefers_earlier_source`). Manuell: Alt+Leertaste, „spotify“ eingeben, Enter startet Spotify.

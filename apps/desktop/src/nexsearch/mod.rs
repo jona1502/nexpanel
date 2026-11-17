@@ -88,6 +88,7 @@ impl SearchEngine {
     }
 }
 
+pub mod appsfolder;
 pub mod calc;
 pub mod commands;
 pub mod launcher;
