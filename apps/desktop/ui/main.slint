@@ -101,6 +101,10 @@ export component MainWindow inherits Window {
  // Tooltip state; `HoverTip` at the end of the window draws it.
  property<string> tip-text; property<length> tip-x; property<length> tip-y; property<length> tip-h; in-out property<bool> tip-visible:false;
  property<[string]> accent-names:["Blau","Violett","Grün","Orange"];
+ property<[string]> hotkey-names:["Alt+Leertaste","Strg+Alt+Leertaste","Win+Alt+Leertaste"];
+ property<[string]> position-names:["Mitte","Oben"];
+ in-out property<int> hotkey-index:0; in-out property<int> position-index:0;
+ in-out property<int> dropdown-kind:0;
  property<length> dd-x; property<length> dd-y; property<length> dd-w;
  in property<string> countdown-text:"00:05:00";
  in property<string> stopwatch-text:"00:00:00";
@@ -238,22 +242,30 @@ export component MainWindow inherits Window {
  if root.settings-error!="": Hint{text:root.settings-error;color:#ffbc91;}
  Card{VerticalLayout{padding:14px;spacing:12px;
  Hint{text:"AKZENTFARBE";}
- Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-open=!root.dropdown-open;}}
+ Dropdown{model:root.accent-names;current-index:root.accent-index;open:root.dropdown-open&&root.dropdown-kind==0;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=0;root.dropdown-open=!root.dropdown-open;}}
  CheckBox{text:"Animationen";checked:root.animations;enabled:root.settings-ready;toggled=>{root.animations=self.checked;root.save-settings();}}
  CheckBox{text:"Bei Fokusverlust ausblenden";checked:root.focus-close;enabled:root.settings-ready;toggled=>{root.focus-close=self.checked;root.save-settings();}}
  CheckBox{text:"Displayhelligkeit koppeln";checked:root.linked;enabled:root.settings-ready;toggled=>{root.linked=self.checked;root.save-settings();}}
  CheckBox{text:"Mit Windows starten (im Tray)";checked:root.autostart;enabled:root.settings-ready;toggled=>{root.autostart=self.checked;root.save-settings();}}
  }}
- Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
+ Card{VerticalLayout{padding:14px;spacing:12px;
+ Hint{text:"NEXSEARCH-HOTKEY";}
+ Dropdown{model:root.hotkey-names;current-index:root.hotkey-index;open:root.dropdown-open&&root.dropdown-kind==1;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=1;root.dropdown-open=!root.dropdown-open;}}
  if root.hotkey-status!="": Hint{text:root.hotkey-status;color:root.hotkey-warning?#ffbc91:#979eaf;}
+ Hint{text:"SUCHFENSTER-POSITION";}
+ Dropdown{model:root.position-names;current-index:root.position-index;open:root.dropdown-open&&root.dropdown-kind==2;enabled:root.settings-ready;toggled(x,y,w)=>{root.dd-x=x;root.dd-y=y;root.dd-w=w;root.dropdown-kind=2;root.dropdown-open=!root.dropdown-open;}}
+ }}
+ Hint{text:root.settings-blocked?"Die vorhandene Datei bleibt unverändert. Zurücksetzen ersetzt sie durch Standardwerte.":"Lokal gespeichert · keine Konten · keine Telemetrie";}
  Button{text:"Einstellungen zurücksetzen";enabled:root.settings-ready;clicked=>{root.reset-settings();}}
  Hint{text:"NexPanel 0.1 · Windows 11\nEsc und × blenden nur aus. Beenden über das Tray-Menü.";}
  }
  }
  }
  }
- if root.dropdown-open: DropdownList{model:root.accent-names;current-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y;list-width:root.dd-w;
-  chosen(i)=>{root.accent-index=i;root.dropdown-open=false;root.save-settings();}
+ if root.dropdown-open: DropdownList{model:root.dropdown-kind==1?root.hotkey-names:root.dropdown-kind==2?root.position-names:root.accent-names;current-index:root.dropdown-kind==1?root.hotkey-index:root.dropdown-kind==2?root.position-index:root.accent-index;list-x:root.dd-x;list-y:root.dd-y;list-width:root.dd-w;
+  chosen(i)=>{
+   if root.dropdown-kind==1 { root.hotkey-index=i; } else if root.dropdown-kind==2 { root.position-index=i; } else { root.accent-index=i; }
+   root.dropdown-open=false;root.save-settings();}
   dismissed=>{root.dropdown-open=false;}}
  HoverTip{text:root.tip-text;anchor-x:root.tip-x;anchor-y:root.tip-y;anchor-h:root.tip-h;shown:root.tip-visible&&!root.dropdown-open;}
 }

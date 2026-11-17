@@ -1,3 +1,4 @@
+use crate::hotkey::{Hotkey, MOD_ALT, MOD_CONTROL, MOD_WIN, VK_SPACE};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Write},
@@ -11,6 +12,73 @@ pub enum Accent {
     Purple,
     Green,
     Orange,
+}
+/// Global hotkey that opens NexSearch. PowerToys Run and others often own Alt+Space, so there
+/// are alternatives; changing it re-registers at runtime.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchHotkey {
+    #[default]
+    AltSpace,
+    CtrlAltSpace,
+    WinAltSpace,
+}
+impl SearchHotkey {
+    /// Order of the entries in the settings dropdown.
+    pub const ALL: [SearchHotkey; 3] = [Self::AltSpace, Self::CtrlAltSpace, Self::WinAltSpace];
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|h| *h == self).unwrap_or(0)
+    }
+    /// Out-of-range indices fall back to the default.
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| Self::ALL.get(i).copied())
+            .unwrap_or_default()
+    }
+    pub fn hotkey(self) -> Hotkey {
+        let modifiers = match self {
+            Self::AltSpace => MOD_ALT,
+            Self::CtrlAltSpace => MOD_CONTROL | MOD_ALT,
+            Self::WinAltSpace => MOD_WIN | MOD_ALT,
+        };
+        Hotkey {
+            modifiers,
+            vk: VK_SPACE,
+        }
+    }
+}
+/// Where the search window opens on the monitor under the cursor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchPosition {
+    /// Search bar in the vertical middle of the work area.
+    #[default]
+    Center,
+    /// Close to the top edge of the work area.
+    Top,
+}
+impl SearchPosition {
+    pub const ALL: [SearchPosition; 2] = [Self::Center, Self::Top];
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|p| *p == self).unwrap_or(0)
+    }
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| Self::ALL.get(i).copied())
+            .unwrap_or_default()
+    }
+}
+/// Unknown values (typo, newer version) fall back to the default instead of making the whole
+/// file unreadable.
+fn lenient_enum<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 /// Number of tabs in the panel; `last_tab` is always below this.
 pub const TAB_COUNT: u8 = 5;
@@ -36,6 +104,12 @@ pub struct Config {
     /// Tab that was open when the panel was last closed (0 = Audio).
     #[serde(deserialize_with = "lenient_tab")]
     pub last_tab: u8,
+    /// Global hotkey for NexSearch (default Alt+Space).
+    #[serde(deserialize_with = "lenient_enum")]
+    pub search_hotkey: SearchHotkey,
+    /// Where the NexSearch window opens (default: vertically centered).
+    #[serde(deserialize_with = "lenient_enum")]
+    pub search_position: SearchPosition,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -46,6 +120,8 @@ impl Default for Config {
             linked_displays: false,
             autostart: false,
             last_tab: 0,
+            search_hotkey: SearchHotkey::default(),
+            search_position: SearchPosition::default(),
         }
     }
 }
@@ -206,5 +282,78 @@ mod tests {
             assert!(load(&path).is_err());
             assert_eq!(std::fs::read(&path).unwrap(), bytes);
         }
+    }
+}
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    #[test]
+    fn search_options_default_for_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, br#"{"autostart":true}"#).unwrap();
+        let config = load(&path).unwrap();
+        assert_eq!(config.search_hotkey, SearchHotkey::AltSpace);
+        assert_eq!(config.search_position, SearchPosition::Center);
+    }
+    #[test]
+    fn search_options_roundtrip_and_use_snake_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let config = Config {
+            search_hotkey: SearchHotkey::WinAltSpace,
+            search_position: SearchPosition::Top,
+            ..Config::default()
+        };
+        save(&path, &config).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains(r#""search_hotkey": "win_alt_space""#),
+            "{text}"
+        );
+        assert!(text.contains(r#""search_position": "top""#), "{text}");
+        assert_eq!(load(&path).unwrap(), config);
+    }
+    #[test]
+    fn unknown_search_values_fall_back_to_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for raw in ["\"f13\"", "3", "null", "[1]"] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"autostart":true,"search_hotkey":{raw},"search_position":{raw}}}"#),
+            )
+            .unwrap();
+            let config = load(&path).unwrap();
+            assert_eq!(config.search_hotkey, SearchHotkey::AltSpace, "{raw}");
+            assert_eq!(config.search_position, SearchPosition::Center, "{raw}");
+            assert!(config.autostart);
+        }
+    }
+    #[test]
+    fn dropdown_indices_roundtrip_and_clamp() {
+        for h in SearchHotkey::ALL {
+            assert_eq!(SearchHotkey::from_index(h.index() as i32), h);
+        }
+        for p in SearchPosition::ALL {
+            assert_eq!(SearchPosition::from_index(p.index() as i32), p);
+        }
+        assert_eq!(SearchHotkey::from_index(-1), SearchHotkey::AltSpace);
+        assert_eq!(SearchHotkey::from_index(99), SearchHotkey::AltSpace);
+        assert_eq!(SearchPosition::from_index(7), SearchPosition::Center);
+    }
+    #[test]
+    fn hotkeys_are_distinct_and_labelled() {
+        let labels: Vec<String> = SearchHotkey::ALL
+            .iter()
+            .map(|h| h.hotkey().label())
+            .collect();
+        assert_eq!(labels[0], "Alt+Leertaste");
+        assert_eq!(labels[1], "Strg+Alt+Leertaste");
+        assert_eq!(labels[2], "Win+Alt+Leertaste");
+        let mut sorted = labels.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 3);
     }
 }

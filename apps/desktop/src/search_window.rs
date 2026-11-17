@@ -3,6 +3,7 @@
 //! `ui/search.slint`; the glue that owns the window is `search_controller.rs` of the binary.
 
 use crate::{
+    config::SearchPosition,
     nexsearch::{
         DEFAULT_LIMIT, NexCommand, SearchAction, SearchEngine, calc::CalcProvider,
         commands::CommandProvider, launcher::LauncherProvider,
@@ -141,9 +142,16 @@ pub struct WindowBounds {
     pub physical_width: u32,
 }
 
-/// Horizontal centre of `work`, upper fifth vertically (like Spotlight/PowerToys Run), so the
-/// window grows downwards while typing. `scale` is the DPI scale of the target monitor.
-pub fn window_bounds(work: Area, scale: f64) -> WindowBounds {
+/// Fraction of the work-area height between its top edge and the window for `SearchPosition::Top`.
+pub const TOP_OFFSET: f64 = 0.15;
+
+/// Placement on the work area `work` of the monitor under the cursor; `scale` is the DPI scale
+/// of that same monitor. Always horizontally centred.
+/// - `Center`: the search bar (input row) sits in the vertical middle; results grow downwards.
+/// - `Top`: [`TOP_OFFSET`] of the work height below its top edge.
+///
+/// The tallest window is always kept inside the work area (the top edge wins if it is too small).
+pub fn window_bounds(work: Area, scale: f64, position: SearchPosition) -> WindowBounds {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
@@ -155,11 +163,15 @@ pub fn window_bounds(work: Area, scale: f64) -> WindowBounds {
     let width =
         ((f64::from(WINDOW_WIDTH) * scale).round() as i32).clamp(1, (work_w - 2 * margin).max(1));
     let max_height = (f64::from(max_window_height()) * scale).round() as i32;
+    let input_height = (f64::from(INPUT_HEIGHT) * scale).round() as i32;
     let x = work.left + (work_w - width) / 2;
-    let preferred_y = work.top + (f64::from(work_h) * 0.2) as i32;
+    let preferred_y = match position {
+        SearchPosition::Center => work.top + (work_h - input_height) / 2,
+        SearchPosition::Top => work.top + (f64::from(work_h) * TOP_OFFSET) as i32,
+    };
     let lowest_y = (work.bottom - max_height).max(work.top);
     WindowBounds {
-        position: (x, preferred_y.min(lowest_y)),
+        position: (x, preferred_y.clamp(work.top, lowest_y)),
         physical_width: width as u32,
     }
 }
@@ -242,7 +254,11 @@ mod win {
 
     /// Centres `window` (physical pixels, the DPI of the monitor under the cursor) like
     /// [`window_bounds`] says. Cheap and idempotent: call it before and after the first show.
-    pub fn place_on_cursor_monitor(window: &slint::Window, logical_height: f32) {
+    pub fn place_on_cursor_monitor(
+        window: &slint::Window,
+        logical_height: f32,
+        position: SearchPosition,
+    ) {
         use slint::winit_030::WinitWindowAccessor;
         // SAFETY: plain queries with valid out pointers.
         let (work, scale) = unsafe {
@@ -274,7 +290,7 @@ mod win {
                 scale,
             )
         };
-        let bounds = window_bounds(work, scale);
+        let bounds = window_bounds(work, scale, position);
         let height = (f64::from(logical_height) * scale).round().max(1.0) as u32;
         let size = slint::PhysicalSize::new(bounds.physical_width, height);
         if window.size() != size {
@@ -389,7 +405,7 @@ mod win {
 }
 
 #[cfg(not(windows))]
-pub fn place_on_cursor_monitor(_: &slint::Window, _: f32) {}
+pub fn place_on_cursor_monitor(_: &slint::Window, _: f32, _: SearchPosition) {}
 #[cfg(not(windows))]
 pub fn launch(_: &Path) -> Result<(), String> {
     Err("Starten benötigt Windows".into())
@@ -551,51 +567,116 @@ mod tests {
         assert!(should_close_on_blur(Duration::from_secs(5)));
     }
 
+    use SearchPosition::{Center, Top};
+
     #[test]
-    fn bounds_center_horizontally_in_upper_fifth() {
-        let b = window_bounds(area(0, 0, 1920, 1040), 1.0);
+    fn center_puts_the_search_bar_in_the_vertical_middle() {
+        let b = window_bounds(area(0, 0, 1920, 1040), 1.0, Center);
         assert_eq!(b.physical_width, 640);
-        assert_eq!(b.position, ((1920 - 640) / 2, 208));
+        assert_eq!(b.position, ((1920 - 640) / 2, (1040 - 56) / 2));
+        // Odd sizes round down, never outside the area.
+        let b = window_bounds(area(0, 0, 1921, 1041), 1.0, Center);
+        assert_eq!(b.position, ((1921 - 640) / 2, (1041 - 56) / 2));
+    }
+
+    #[test]
+    fn top_is_fifteen_percent_below_the_top_edge() {
+        let b = window_bounds(area(0, 0, 1920, 1040), 1.0, Top);
+        assert_eq!(b.position, ((1920 - 640) / 2, 156));
+        let b = window_bounds(area(0, 40, 1920, 1080), 1.0, Top);
+        assert_eq!(
+            b.position.1,
+            40 + 156,
+            "relative to the work area, not the screen"
+        );
     }
 
     #[test]
     fn bounds_scale_with_monitor_dpi() {
-        let b = window_bounds(area(0, 0, 3840, 2120), 2.0);
+        let b = window_bounds(area(0, 0, 3840, 2120), 2.0, Top);
         assert_eq!(b.physical_width, 1280);
-        assert_eq!(b.position.0, (3840 - 1280) / 2);
-        assert_eq!(b.position.1, 424);
-        let b = window_bounds(area(0, 0, 2560, 1400), 1.5);
+        assert_eq!(b.position, ((3840 - 1280) / 2, 318));
+        let b = window_bounds(area(0, 0, 3840, 2120), 2.0, Center);
+        assert_eq!(
+            b.position.1,
+            (2120 - 112) / 2,
+            "bar height is 56 logical = 112 physical"
+        );
+        let b = window_bounds(area(0, 0, 2560, 1400), 1.5, Center);
         assert_eq!(b.physical_width, 960);
+        assert_eq!(b.position, ((2560 - 960) / 2, (1400 - 84) / 2));
+    }
+
+    #[test]
+    fn each_monitor_gets_its_own_work_area_and_scale() {
+        // Left of the primary monitor (negative x), 100 %, taskbar on top (work starts at y=40).
+        let left = area(-1920, 40, 0, 1080);
+        // Primary, 125 %.
+        let primary = area(0, 0, 2560, 1400);
+        // Right of the primary, 4K at 200 %, shifted up (negative y).
+        let right = area(2560, -300, 6400, 1800);
+        for position in [Center, Top] {
+            let l = window_bounds(left, 1.0, position);
+            let p = window_bounds(primary, 1.25, position);
+            let r = window_bounds(right, 2.0, position);
+            assert_eq!(l.physical_width, 640);
+            assert_eq!(p.physical_width, 800);
+            assert_eq!(r.physical_width, 1280);
+            assert_eq!(l.position.0, -1920 + (1920 - 640) / 2);
+            assert_eq!(p.position.0, (2560 - 800) / 2);
+            assert_eq!(r.position.0, 2560 + (3840 - 1280) / 2);
+            for (b, work, scale) in [(l, left, 1.0), (p, primary, 1.25), (r, right, 2.0)] {
+                let w = b.physical_width as i32;
+                let tallest = (f64::from(max_window_height()) * scale).round() as i32;
+                assert!(b.position.0 >= work.left && b.position.0 + w <= work.right);
+                assert!(b.position.1 >= work.top && b.position.1 + tallest <= work.bottom);
+            }
+        }
+        assert_eq!(
+            window_bounds(left, 1.0, Center).position.1,
+            40 + (1040 - 56) / 2
+        );
+        assert_eq!(
+            window_bounds(right, 2.0, Top).position.1,
+            -300 + (2100.0 * 0.15) as i32
+        );
+        assert_eq!(
+            window_bounds(right, 2.0, Center).position.1,
+            -300 + (2100 - 112) / 2
+        );
     }
 
     #[test]
     fn bounds_keep_negative_monitor_origin() {
-        let b = window_bounds(area(-1920, 30, 0, 1080), 1.0);
+        let b = window_bounds(area(-1920, 30, 0, 1080), 1.0, Center);
         assert_eq!(b.position.0, -1920 + (1920 - 640) / 2);
         assert!(b.position.1 >= 30);
     }
 
     #[test]
     fn bounds_stay_inside_small_work_areas() {
-        let work = area(0, 0, 500, 400);
-        let b = window_bounds(work, 1.0);
-        assert!(b.physical_width as i32 <= 500 - 16);
-        assert!(b.position.0 >= work.left);
-        assert!(b.position.1 >= work.top);
-        let work = area(0, 0, 1920, 600);
-        let b = window_bounds(work, 1.0);
-        let bottom = b.position.1 + max_window_height() as i32;
-        assert!(bottom <= 600, "tallest window fits: {bottom}");
-        // Work area shorter than the window: top edge wins.
-        let b = window_bounds(area(0, 100, 1920, 300), 1.0);
-        assert_eq!(b.position.1, 100);
+        for position in [Center, Top] {
+            let work = area(0, 0, 500, 400);
+            let b = window_bounds(work, 1.0, position);
+            assert!(b.physical_width as i32 <= 500 - 16);
+            assert!(b.position.0 >= work.left);
+            assert!(b.position.1 >= work.top);
+            // Tallest window still fits where the area allows it.
+            let work = area(0, 0, 1920, 600);
+            let b = window_bounds(work, 1.0, position);
+            let bottom = b.position.1 + max_window_height() as i32;
+            assert!(bottom <= 600, "tallest window fits: {bottom}");
+            // Work area shorter than the window: top edge wins.
+            let b = window_bounds(area(0, 100, 1920, 300), 1.0, position);
+            assert_eq!(b.position.1, 100);
+        }
     }
 
     #[test]
     fn bounds_survive_bad_scale() {
         for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             assert_eq!(
-                window_bounds(area(0, 0, 1920, 1080), scale).physical_width,
+                window_bounds(area(0, 0, 1920, 1080), scale, Center).physical_width,
                 640
             );
         }

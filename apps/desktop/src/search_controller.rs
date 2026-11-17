@@ -6,6 +6,7 @@
 
 use crate::{SearchItem, SearchWindow};
 use nexpanel::{
+    config::SearchPosition,
     nexsearch::{NexCommand, SearchResult},
     platform,
     search_window::{self as sw, ActionHost, SearchKey, Selection},
@@ -79,6 +80,7 @@ struct State {
     tx: mpsc::Sender<Request>,
     mailbox: Mailbox,
     shown_at: Cell<Option<Instant>>,
+    position: Cell<SearchPosition>,
     run_command: Rc<dyn Fn(NexCommand)>,
     open_timer: slint::Timer,
     focus_timer: slint::Timer,
@@ -185,7 +187,14 @@ impl State {
         let _ = win.hide();
     }
 
-    fn show(self: &Rc<Self>, win: &SearchWindow, accent: slint::Color, animations: bool) {
+    fn show(
+        self: &Rc<Self>,
+        win: &SearchWindow,
+        accent: slint::Color,
+        animations: bool,
+        position: SearchPosition,
+    ) {
+        self.position.set(position);
         self.seq.fetch_add(1, Ordering::SeqCst);
         self.mailbox
             .lock()
@@ -199,10 +208,10 @@ impl State {
         let height = sw::window_height(0, false);
         // Same dance as the tray popup: Slint creates the native window lazily on the first
         // show, so position before (later shows) and after (first show).
-        sw::place_on_cursor_monitor(win.window(), height);
+        sw::place_on_cursor_monitor(win.window(), height, position);
         let _ = win.show();
         platform::hide_from_alt_tab(win.window());
-        sw::place_on_cursor_monitor(win.window(), height);
+        sw::place_on_cursor_monitor(win.window(), height, position);
         win.window().with_winit_window(|w| w.focus_window());
         win.invoke_focus_input();
         self.shown_at.set(Some(Instant::now()));
@@ -298,6 +307,7 @@ impl SearchController {
             tx,
             mailbox: mailbox.clone(),
             shown_at: Cell::new(None),
+            position: Cell::new(SearchPosition::default()),
             run_command,
             open_timer: slint::Timer::default(),
             focus_timer: slint::Timer::default(),
@@ -374,11 +384,16 @@ impl SearchController {
                     WindowEvent::ScaleFactorChanged { .. } => {
                         // Apply after Slint has processed the new scale, outside this callback.
                         let weak = weak.clone();
+                        let position = state.position.get();
                         slint::Timer::single_shot(Duration::ZERO, move || {
                             if let Some(win) = weak.upgrade()
                                 && win.window().is_visible()
                             {
-                                sw::place_on_cursor_monitor(win.window(), win.get_win_height());
+                                sw::place_on_cursor_monitor(
+                                    win.window(),
+                                    win.get_win_height(),
+                                    position,
+                                );
                             }
                         });
                     }
@@ -391,11 +406,11 @@ impl SearchController {
     }
 
     /// Hotkey handler: opens the window on the cursor's monitor, or closes it again.
-    pub fn toggle(&self, accent: slint::Color, animations: bool) {
+    pub fn toggle(&self, accent: slint::Color, animations: bool, position: SearchPosition) {
         if self.win.window().is_visible() {
             self.state.hide(&self.win);
         } else {
-            self.state.show(&self.win, accent, animations);
+            self.state.show(&self.win, accent, animations, position);
         }
     }
 }
@@ -425,5 +440,22 @@ mod tests {
             ..result
         };
         assert_eq!(to_item(&launch).hint, "Öffnen");
+    }
+
+    #[test]
+    fn settings_dropdown_labels_match_the_config_enums() {
+        let ui: String = include_str!("../ui/main.slint")
+            .split_whitespace()
+            .collect();
+        let hotkeys: Vec<String> = nexpanel::config::SearchHotkey::ALL
+            .iter()
+            .map(|h| format!("\"{}\"", h.hotkey().label()))
+            .collect();
+        assert!(
+            ui.contains(&format!("hotkey-names:[{}];", hotkeys.join(","))),
+            "{hotkeys:?}"
+        );
+        assert_eq!(nexpanel::config::SearchPosition::ALL.len(), 2);
+        assert!(ui.contains(r#"position-names:["Mitte","Oben"];"#));
     }
 }
