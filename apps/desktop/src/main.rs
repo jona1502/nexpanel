@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use nexpanel::{
     config::{Accent, Config},
-    platform,
+    meter, platform,
     popup_state::{Action, Event, Popup, State},
     services::{self, AudioCommand, DisplayCommand, system::SystemCommand},
     settings_worker::{self, Command},
@@ -125,6 +125,28 @@ fn next_tick_interval(state: &TickState) -> Option<Duration> {
         Some(IDLE_TICK)
     } else {
         None
+    }
+}
+fn peak_color(percent: u8) -> slint::Color {
+    let [r, g, b] = meter::level_color(percent);
+    slint::Color::from_rgb_u8(r, g, b)
+}
+/// Writes new levels into the audio rows; rows missing from `peaks` go back to 0. Only rows whose
+/// level changed are touched (`set_row_data`), so an ongoing slider drag is not disturbed.
+fn apply_peaks(model: &VecModel<AudioItem>, peaks: &[(String, u8)]) {
+    for i in 0..model.row_count() {
+        let Some(mut row) = model.row_data(i) else {
+            continue;
+        };
+        let level = peaks
+            .iter()
+            .find(|(id, _)| row.id.as_str() == id)
+            .map_or(0, |(_, level)| i32::from(*level));
+        if row.peak != level {
+            row.peak = level;
+            row.peak_color = peak_color(level.clamp(0, 100) as u8);
+            model.set_row_data(i, row);
+        }
     }
 }
 /// Delay for the one-shot timer that wakes the loop exactly when a running countdown ends.
@@ -411,7 +433,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))?;
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     let (dtx, drx, display_crashed) = services::display::spawn();
-    let (atx, arx, audio_crashed) = services::audio::spawn();
+    let (atx, arx, audio_peaks, audio_crashed) = services::audio::spawn();
     let (ytx, yrx, system_crashed) = services::system::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
     // Last tab written to settings.json (or loaded from it); see `save_tab_if_changed`.
@@ -426,6 +448,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Rows the user is currently changing ignore worker values for a short time.
     let display_hold = Rc::new(RefCell::new(LocalHold::default()));
     let audio_hold = Rc::new(RefCell::new(LocalHold::default()));
+    // Level meter: polls the worker's peak channel at ~25 Hz, only while it is switched on.
+    let meter_timer = Rc::new(slint::Timer::default());
+    let meter_drain: Rc<dyn Fn(bool)> = {
+        let model = audio_model.clone();
+        Rc::new(move |clear: bool| {
+            let latest = audio_peaks.try_iter().last();
+            if clear {
+                apply_peaks(&model, &[]);
+            } else if let Some(peaks) = latest {
+                apply_peaks(&model, &peaks);
+            }
+        })
+    };
     let popup = Rc::new(RefCell::new(Popup::new()));
     let started = Instant::now();
     let ms = move || started.elapsed().as_millis() as u64;
@@ -793,6 +828,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_popup = popup.clone();
     let tab_tx = stx.clone();
     let mut visible = None;
+    let mut meter_active = None;
     let mut crash_shown = (false, false, false);
     let mut system_active = None;
     let tick_timer = Rc::downgrade(&tick);
@@ -847,6 +883,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         master,
                         has_icon: icon.is_some(),
                         icon: icon.unwrap_or_default(),
+                        peak: 0,
+                        peak_color: peak_color(0),
                     }
                 };
                 let mut rows: Vec<_> = s
@@ -855,6 +893,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|r| to_item(r, true))
                     .chain(s.sessions.into_iter().map(|r| to_item(r, false)))
                     .collect();
+                // Snapshots carry no levels: keep the live ones so bars do not flicker.
+                for row in &mut rows {
+                    if let Some(old) = audio_model.iter().find(|o| o.id == row.id) {
+                        row.peak = old.peak;
+                        row.peak_color = old.peak_color;
+                    }
+                }
                 let mut hold = audio_hold.borrow_mut();
                 keep_held(&*audio_model, &mut rows, &mut hold, Instant::now(), |r| {
                     r.id.clone()
@@ -927,6 +972,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Panel just closed: remember the tab (only written if it changed).
                 if !active && !capture_mode {
                     save_tab_if_changed(&a, &tab_tx, &saved_tab);
+                }
+            }
+            // Level meter: measured and polled only while the panel is visible AND the Audio tab is shown.
+            let want_meter = active && a.get_tab() == TAB_AUDIO && !capture_mode;
+            if meter_active != Some(want_meter) {
+                meter_active = Some(want_meter);
+                let _ = atx.send(AudioCommand::SetMetering(want_meter));
+                if want_meter {
+                    let drain = meter_drain.clone();
+                    meter_timer.start(slint::TimerMode::Repeated, meter::INTERVAL, move || {
+                        drain(false)
+                    });
+                } else {
+                    meter_timer.stop();
+                    meter_drain(true);
                 }
             }
             // Sample only while the panel is visible AND the System tab is shown.
@@ -1203,6 +1263,26 @@ mod tests {
         }
         // The audio collapse feature was removed; the property must not come back.
         assert!(!compact.contains("apps-open"));
+    }
+    #[test]
+    fn peaks_update_only_changed_rows_and_reset_missing_ones() {
+        let row = |id: &str, value: i32, peak: i32| AudioItem {
+            id: id.into(),
+            value,
+            peak,
+            ..Default::default()
+        };
+        let model = VecModel::from(vec![row("a", 40, 10), row("b", 55, 0), row("c", 70, 30)]);
+        let rows =
+            |m: &VecModel<AudioItem>| m.iter().map(|r| (r.value, r.peak)).collect::<Vec<_>>();
+        apply_peaks(&model, &[("a".into(), 80), ("b".into(), 0)]);
+        // "a" rose, "b" unchanged, "c" is not reported anymore and drops to zero.
+        assert_eq!(rows(&model), [(40, 80), (55, 0), (70, 0)]);
+        assert_eq!(model.row_data(0).unwrap().peak_color, peak_color(80));
+        // Volume values are never touched by level updates.
+        apply_peaks(&model, &[]);
+        assert_eq!(rows(&model), [(40, 0), (55, 0), (70, 0)]);
+        assert_eq!(model.row_data(0).unwrap().peak_color, peak_color(0));
     }
     #[test]
     fn tab_constants_match_slint() {
