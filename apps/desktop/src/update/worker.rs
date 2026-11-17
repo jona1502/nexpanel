@@ -36,6 +36,47 @@ pub struct Snapshot {
     pub quit: bool,
 }
 
+/// Flat values for the settings tab (`update-*` properties in `main.slint`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View {
+    pub state: i32,
+    pub version: String,
+    /// 0..=100 while the size is known, otherwise -1.
+    pub progress: i32,
+    pub error_kind: i32,
+    pub error_detail: String,
+    /// The installation can be replaced by the updater.
+    pub managed: bool,
+    pub busy: bool,
+    /// Show "Jetzt aktualisieren".
+    pub can_install: bool,
+}
+
+impl Snapshot {
+    pub fn view(&self) -> View {
+        let state = &self.state;
+        let error = state.error();
+        // After "installed but not restarted" another install would only repeat itself.
+        let retryable = error.is_none_or(|e| e.kind != ErrorKind::RestartFailed);
+        View {
+            state: state.code(),
+            version: state
+                .release()
+                .map(|r| r.version.to_string())
+                .unwrap_or_default(),
+            progress: state.percent().map_or(-1, i32::from),
+            error_kind: error.map_or(0, |e| e.kind.code()),
+            error_detail: error.map(|e| e.detail.clone()).unwrap_or_default(),
+            managed: self.can_install,
+            busy: state.is_busy(),
+            can_install: self.can_install
+                && !state.is_busy()
+                && state.installable().is_some()
+                && retryable,
+        }
+    }
+}
+
 /// Everything that touches the installation. The real one works on the install directory,
 /// tests use a mock.
 pub trait Installer {
@@ -576,5 +617,66 @@ mod tests {
         let snaps: Vec<_> = snapshots.iter().collect();
         assert_eq!(snaps.last().unwrap().state.code(), 8);
         assert_eq!(installs(&installer), 0);
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+    use crate::update::release::test_release;
+
+    fn snap(state: State, can_install: bool) -> Snapshot {
+        Snapshot {
+            state,
+            can_install,
+            quit: false,
+        }
+    }
+
+    #[test]
+    fn install_button_only_when_an_update_can_be_installed_now() {
+        let r = test_release("v0.2.0");
+        assert!(snap(State::Available(r.clone()), true).view().can_install);
+        // Not a managed install: shown as available, but no button.
+        let v = snap(State::Available(r.clone()), false).view();
+        assert!(!v.can_install && !v.managed && v.version == "0.2.0");
+        for state in [State::Idle, State::UpToDate, State::Checking] {
+            assert!(!snap(state, true).view().can_install);
+        }
+        let busy = State::Downloading {
+            release: r.clone(),
+            done: 5,
+            total: Some(10),
+        };
+        let v = snap(busy, true).view();
+        assert!(v.busy && !v.can_install && v.progress == 50 && v.state == 4);
+        let verifying = snap(State::Verifying(r.clone()), true).view();
+        assert!(verifying.busy && verifying.progress == -1);
+    }
+
+    #[test]
+    fn failed_install_can_be_retried_but_failed_restart_cannot() {
+        let r = test_release("v0.2.0");
+        let failed = |kind| State::Error {
+            error: UpdateError::new(kind, "detail"),
+            retry: Some(r.clone()),
+        };
+        let v = snap(failed(ErrorKind::HashMismatch), true).view();
+        assert!(
+            v.can_install
+                && v.error_kind == ErrorKind::HashMismatch.code()
+                && v.error_detail == "detail"
+        );
+        assert!(
+            !snap(failed(ErrorKind::RestartFailed), true)
+                .view()
+                .can_install
+        );
+        // A failed check has nothing to install.
+        let check_failed = State::Error {
+            error: UpdateError::new(ErrorKind::Network, "x"),
+            retry: None,
+        };
+        assert!(!snap(check_failed, true).view().can_install);
     }
 }

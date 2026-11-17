@@ -12,6 +12,11 @@ use nexpanel::{
     time_tools::{Countdown, Stopwatch},
     tray::{self, TrayEvent},
     ui_models::{LocalHold, keep_held, reconcile},
+    update::{
+        self, schedule,
+        version::Version,
+        worker::{self as update_worker, Command as UpdateCommand},
+    },
 };
 use slint::{
     ComponentHandle, Model, ModelRc, VecModel,
@@ -49,6 +54,22 @@ fn parse_arguments(args: &[String]) -> Result<Mode, &'static str> {
         }
         _ => Err("Ungültige Argumente; --help zeigt die Optionen"),
     }
+}
+/// Removes `--wait-pid <pid>` (set by the updater when it starts the new version) from `args`.
+fn take_wait_pid(args: &mut Vec<String>) -> Result<Option<u32>, &'static str> {
+    let Some(position) = args
+        .iter()
+        .position(|a| a == nexpanel::update::install::WAIT_PID_ARG)
+    else {
+        return Ok(None);
+    };
+    let pid = args
+        .get(position + 1)
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|pid| *pid != 0)
+        .ok_or("Ungültige Argumente; --wait-pid erwartet eine Prozess-ID")?;
+    args.drain(position..position + 2);
+    Ok(Some(pid))
 }
 /// Tab indices in `main.slint` (`for label[i] in [...]`, `root.tab==N`).
 /// Order: Audio, Display, System, Zeit, Einstellungen.
@@ -92,6 +113,17 @@ fn capture_name(tab: usize) -> &'static str {
         "04-zeit.png",
         "05-einstellungen.png",
     ][tab]
+}
+fn apply_update(a: &MainWindow, snapshot: &update_worker::Snapshot) {
+    let v = snapshot.view();
+    a.set_update_state(v.state);
+    a.set_update_version(v.version.into());
+    a.set_update_progress(v.progress);
+    a.set_update_error_kind(v.error_kind);
+    a.set_update_error_detail(v.error_detail.into());
+    a.set_update_managed(v.managed);
+    a.set_update_busy(v.busy);
+    a.set_update_can_install(v.can_install);
 }
 fn apply_system(a: &MainWindow, s: &services::system::SystemSnapshot) {
     let v = services::system::view(s);
@@ -382,7 +414,8 @@ fn report_startup_error(message: &str) {
     eprintln!("{message}");
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
+    let mut args: Vec<_> = std::env::args().skip(1).collect();
+    let wait_pid = take_wait_pid(&mut args)?;
     let mode = parse_arguments(&args)?;
     let capture_mode = matches!(mode, Mode::Capture(_));
     // Normal starts log only after `acquire` succeeded: a second instance must not touch the log.
@@ -409,6 +442,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         println!("Autostart (gelesen): {:?}", platform::read_autostart());
         return Ok(());
+    }
+    // Started by the updater: the old instance still holds the single-instance mutex until it
+    // has exited.
+    if let Some(pid) = wait_pid
+        && matches!(mode, Mode::Normal(_))
+    {
+        platform::wait_for_process_exit(pid, Duration::from_secs(15));
     }
     #[cfg(windows)]
     let instance = if capture_mode {
@@ -452,6 +492,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (atx, arx, audio_peaks, audio_crashed) = services::audio::spawn();
     let (ytx, yrx, system_crashed) = services::system::spawn();
     let (stx, srx, settings_thread) = settings_worker::spawn();
+    // Update worker: network and installation never run on the UI thread. Not in capture mode.
+    let updates = (!capture_mode).then(|| {
+        update_worker::spawn(
+            Version::parse(update::CURRENT_VERSION).expect("package version is valid semver"),
+            true,
+            update::system_transport,
+            update_worker::FsInstaller::new(std::env::current_exe().ok()),
+            &nexpanel::logging::CrashFlag::default(),
+        )
+    });
+    let update_tx = updates.as_ref().map(|u| u.tx.clone());
+    let update_cancel = updates.as_ref().map(|u| u.cancel.clone());
+    let update_rx = updates.map(|u| u.rx);
     // Last tab written to settings.json (or loaded from it); see `save_tab_if_changed`.
     let saved_tab = Rc::new(Cell::new(TAB_AUDIO));
     let tab_restored = Rc::new(Cell::new(false));
@@ -811,6 +864,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = tx.send(Command::Reset);
         }
     });
+    // Manual and scheduled checks share this path: remember the attempt (also persisted in
+    // settings.json) so a failing or offline check is not repeated more than once per 24 h.
+    let check_updates: Rc<dyn Fn(&MainWindow)> = Rc::new({
+        let (tx, settings_tx) = (update_tx.clone(), stx.clone());
+        move |app| {
+            let Some(tx) = &tx else {
+                return;
+            };
+            LAST_UPDATE_CHECK.store(schedule::unix_now(), Ordering::Relaxed);
+            if app.get_settings_ready() && !app.get_settings_blocked() {
+                let _ = settings_tx.send(Command::Save(config_from(app)));
+            }
+            let _ = tx.send(UpdateCommand::Check);
+        }
+    });
+    app.on_check_updates({
+        let (weak, check_updates) = (app.as_weak(), check_updates.clone());
+        move || {
+            if let Some(a) = weak.upgrade() {
+                check_updates(&a);
+            }
+        }
+    });
+    // The only way to install: the user clicked "Jetzt aktualisieren".
+    app.on_install_update({
+        let tx = update_tx.clone();
+        move || {
+            if let Some(tx) = &tx {
+                let _ = tx.send(UpdateCommand::Install);
+            }
+        }
+    });
     let countdown = Rc::new(RefCell::new(
         Countdown::new(300_000).expect("valid default"),
     ));
@@ -934,6 +1019,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let weak = app.as_weak();
     let tick_popup = popup.clone();
     let tick_sync_hotkey = sync_hotkey.clone();
+    let tick_update_check = check_updates.clone();
+    let tick_app_command = app_command.clone();
     let tab_tx = stx.clone();
     let mut visible = None;
     let mut meter_active = None;
@@ -1046,6 +1133,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 a.set_settings_error(s.error.into());
                 a.set_settings_blocked(s.blocked);
                 a.set_settings_ready(true);
+            }
+            if let Some(rx) = &update_rx {
+                if let Some(snapshot) = rx.try_iter().last() {
+                    apply_update(&a, &snapshot);
+                    if snapshot.quit {
+                        // The new version is installed and running; leave cleanly so it can
+                        // take over the single-instance mutex.
+                        tick_app_command(NexCommand::Quit);
+                    }
+                }
+                // At start and then at most once per 24 h; never before the settings are loaded
+                // (the timestamp lives there) and never while a corrupt file blocks saving.
+                if a.get_settings_ready()
+                    && !a.get_settings_blocked()
+                    && !a.get_update_busy()
+                    && schedule::auto_check_due(
+                        a.get_auto_update_check(),
+                        LAST_UPDATE_CHECK.load(Ordering::Relaxed),
+                        schedule::unix_now(),
+                    )
+                {
+                    tick_update_check(&a);
+                }
             }
             #[cfg(windows)]
             if instance.as_ref().is_some_and(|i| i.open_requested()) {
@@ -1232,6 +1342,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = shutdown_display.send(DisplayCommand::Shutdown);
     let _ = shutdown_audio.send(AudioCommand::Shutdown);
     let _ = shutdown_system.send(SystemCommand::Shutdown);
+    if let Some(cancel) = &update_cancel {
+        cancel.store(true, Ordering::Relaxed);
+    }
+    if let Some(tx) = &update_tx {
+        let _ = tx.send(UpdateCommand::Shutdown);
+    }
     // Display and audio workers: wait briefly so COM/DDC handles are released.
     nexpanel::logging::join_workers(Duration::from_secs(1));
     let _ = stx.send(Command::Shutdown);
@@ -1421,6 +1537,29 @@ mod tests {
             (TAB_AUDIO, TAB_SYSTEM, TAB_TIMER, TAB_SETTINGS),
             (0, 2, 3, 4)
         );
+    }
+    #[test]
+    fn wait_pid_argument_is_extracted_and_validated() {
+        let mut a = args(&["--background", "--wait-pid", "1234"]);
+        assert_eq!(take_wait_pid(&mut a), Ok(Some(1234)));
+        assert_eq!(a, args(&["--background"]));
+        assert_eq!(parse_arguments(&a), Ok(Mode::Normal(true)));
+        let mut none = args(&["--background"]);
+        assert_eq!(take_wait_pid(&mut none), Ok(None));
+        assert_eq!(none, args(&["--background"]));
+        for bad in [
+            args(&["--wait-pid"]),
+            args(&["--wait-pid", "abc"]),
+            args(&["--wait-pid", "0"]),
+            args(&["--wait-pid", "-1"]),
+            args(&["--wait-pid", "99999999999"]),
+        ] {
+            assert!(take_wait_pid(&mut bad.clone()).is_err(), "{bad:?}");
+        }
+        // Anything left after removing the flag is still validated by the normal parser.
+        let mut extra = args(&["--wait-pid", "5", "--bogus"]);
+        take_wait_pid(&mut extra).unwrap();
+        assert!(parse_arguments(&extra).is_err());
     }
     #[test]
     fn sanitize_tab_clamps_out_of_range_to_audio() {
