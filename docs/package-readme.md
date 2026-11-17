@@ -20,6 +20,10 @@ Eigenes Ziel ohne Startmenü-Verknüpfung:
 
 NexPanel danach per Startmenü oder nexpanel.exe öffnen. Tray-Klick schaltet das Panel um; Esc und Schließen blenden aus. Beenden erfolgt im Tray-Menü. --background startet versteckt; --help zeigt Diagnose- und Aufnahmeoptionen.
 
+## Updates
+
+Einstellungen → Updates fragt bei GitHub nach neuen Versionen (Standard: beim Start, höchstens einmal in 24 Stunden; abschaltbar mit „Automatisch prüfen“). Installiert wird nur nach Klick auf „Jetzt aktualisieren“ und nur bei einer Installation mit install.ps1; danach startet NexPanel neu. Die Releases sind nicht signiert: Die SHA256-Prüfsumme stammt aus demselben Release und belegt nur einen vollständigen Download, nicht die Herkunft.
+
 ## Deinstallation
 
 NexPanel im Tray beenden. Das installierte uninstall.ps1 im Installationsordner ausführen (bei Installation mit -NoShortcut ebenfalls -NoShortcut übergeben). Entfernt nur bekannte Paketdateien, die eigene passende Verknüpfung und einen exakt auf diese Installation zeigenden NexPanel-Autostarteintrag. Keine Prozesse werden erzwungen beendet. %LOCALAPPDATA%\NexPanel\settings.json und fremde Dateien bleiben erhalten.

@@ -292,3 +292,27 @@ Bei Fokus-Verweigerung durch Windows (Vordergrundsperre) schließt sich das Such
 ## NexSearch: Launcher mit shell:AppsFolder (agent/launcher-appsfolder)
 
 Der Launcher indexiert zusätzlich den virtuellen Ordner `shell:AppsFolder` (Store-/UWP-Apps wie Spotify und klassische Apps) neben den Startmenü-`.lnk`-Dateien. Start über `ShellExecuteW` mit `shell:AppsFolder\<AppUserModelID>`. Bei gleichem Namen gewinnt der AppsFolder-Eintrag (startet zuverlässig über die AppUserModelID). Die Aufzählung läuft mit eigenem COM-Init im Index-Thread. Kombination/Deduplizierung ist per Mock getestet (`combined_source_prefers_earlier_source`). Manuell: Alt+Leertaste, „spotify“ eingeben, Enter startet Spotify.
+
+## Auto-Updater
+
+Automatisiert (Unit-Tests, `cargo test`): SemVer inkl. Pre-Releases, Asset-Auswahl, SHA256 (Standardvektoren) und `.sha256`-Format, Zip-Reader (inkl. echtem `Compress-Archive`-Zip, Zip-Slip, Größenlimits, beschädigte Daten), URL-/Host-/Redirect-Regeln, Zustandsmaschine, Prüf-/Download-/Verifikations-Engine und Worker mit Mock-Transport und Mock-Installer (Hash-Fehler, falsche Version, Downgrade, Netzfehler, Abbruch, nicht verwaltete Installation), Austauschlogik mit Rollback in Temp-Ordnern mit Dummy-Dateien, Zeitplan (24 h), Config-Defaults, `--wait-pid`. Netzwerktests gegen GitHub (WinHTTP, Weiterleitung, Größenlimit) sind `#[ignore]`: `cargo test -p nexpanel --lib update::winhttp -- --ignored`.
+
+Nur manuell prüfbar, mit einem echten Test-Release oder lokal nachgebautem Paket. **Nie die produktive Installation dafür verwenden**, sondern eine mit `install.ps1 -InstallDirectory <Testordner> -NoShortcut` angelegte:
+
+| Nr. | Aktion | Erwartung |
+|---|---|---|
+| U1 | Einstellungen öffnen | Abschnitt „Updates“ zeigt installierte Version, „Noch nicht geprüft.“ (oder schon das Ergebnis der Startprüfung), Schalter „Automatisch prüfen (täglich)“ an |
+| U2 | „Jetzt prüfen“ ohne neueres Release | „NexPanel ist aktuell.“; `settings.json` enthält ein neues `last_update_check` |
+| U3 | Netzwerk trennen, „Jetzt prüfen“ | Fehlertext „Keine Verbindung zu GitHub.“, kein Hänger, Panel bleibt bedienbar |
+| U4 | Test-Release `vX.Y.Z-test` (neuer, mit zip + sha256) veröffentlichen, „Jetzt prüfen“ | „Version … ist verfügbar.“ und Button „Jetzt aktualisieren“; ohne Klick passiert nichts weiter |
+| U5 | Klick auf „Jetzt aktualisieren“ in einer Testinstallation | Fortschritt, dann Neustart; Panel zeigt die neue Version; im Ordner nur noch die neuen Dateien, `nexpanel.exe.old` verschwindet nach dem Neustart; Autostart-Eintrag und Startmenü-Verknüpfung unverändert |
+| U6 | Zip im Test-Release manipulieren (ein Byte ändern, Prüfsumme unverändert) | „Prüfsumme stimmt nicht überein“, nichts installiert, alte Version läuft |
+| U7 | `VERSION.txt` im Zip abweichend vom Tag | „Die Version im Paket passt nicht zum Release“, nichts installiert |
+| U8 | Testinstallation in einem Ordner ohne Schreibrecht für den Nutzer | „Keine Schreibrechte im Installationsordner.“, Installation unverändert |
+| U9 | Entwicklungs-Build (`target\debug\nexpanel.exe`) starten, prüfen | Prüfen funktioniert; bei Verfügbarkeit Hinweis „nicht mit install.ps1 eingerichtet“, kein Button |
+| U10 | Schalter „Automatisch prüfen“ aus, App neu starten | Keine Prüfung beim Start (Log `nexpanel.log` ohne „Update:“-Zeilen), Schalter bleibt aus |
+| U11 | `last_update_check` in `settings.json` auf eine Zeit vor mehr als 24 h setzen, Schalter an, App starten | Prüfung beim Start, Zeitstempel aktualisiert; erneuter Start innerhalb von 24 h prüft nicht noch einmal |
+| U12 | Während der Prüfung eine zweite Instanz starten | Wie sonst: öffnet das Panel der laufenden Instanz |
+| U13 | Während des Downloads über das Tray-Menü beenden | Beendet sich innerhalb weniger Sekunden, keine Reste im Installationsordner |
+
+Bekannte Grenzen: Neustart nach dem Austausch (`--wait-pid`, Single-Instance-Übergabe) und das Ersetzen der laufenden exe sind nur in einer Testinstallation praktisch prüfbar. Dass eine laufende exe umbenannt und unter dem alten Namen neu angelegt, aber nicht gelöscht werden kann, wurde einmalig mit einer Kopie von `timeout.exe` in einem Temp-Ordner bestätigt. Die Releases sind unsigniert; siehe Sicherheitshinweis in [releasing.md](releasing.md).
