@@ -31,10 +31,10 @@ impl Hotkey {
     pub fn label(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
         for (flag, name) in [
+            (MOD_WIN, "Win"),
             (MOD_CONTROL, "Strg"),
             (MOD_ALT, "Alt"),
             (MOD_SHIFT, "Umschalt"),
-            (MOD_WIN, "Win"),
         ] {
             if self.modifiers & flag != 0 {
                 parts.push(name.into());
@@ -106,16 +106,26 @@ impl HotkeyStatus {
 
     /// Hint for the settings tab; empty while nothing is worth saying.
     pub fn message(&self, hotkey: &Hotkey) -> String {
+        self.message_with(hotkey, None)
+    }
+
+    /// Like [`message`](Self::message); `fallback` is a previous hotkey that stayed active
+    /// because `hotkey` could not be registered.
+    pub fn message_with(&self, hotkey: &Hotkey, fallback: Option<&Hotkey>) -> String {
         let name = hotkey.label();
+        let tail = match fallback {
+            Some(old) => format!("Weiterhin aktiv: {}.", old.label()),
+            None => "Die globale Suche ist per Tastenkombination nicht erreichbar.".into(),
+        };
         match self {
             Self::Inactive => String::new(),
             Self::Active => format!("Globale Suche: {name}"),
             Self::Conflict => format!(
-                "{name} ist bereits belegt (anderes Programm oder Systemfunktion). Die globale Suche ist per Tastenkombination nicht erreichbar."
+                "{name} ist bereits belegt (anderes Programm oder Systemfunktion, z. B. PowerToys Run). {tail}"
             ),
-            Self::Failed(code) => format!(
-                "{name} konnte nicht registriert werden (Fehler {code}). Die globale Suche ist per Tastenkombination nicht erreichbar."
-            ),
+            Self::Failed(code) => {
+                format!("{name} konnte nicht registriert werden (Fehler {code}). {tail}")
+            }
         }
     }
 }
@@ -130,10 +140,13 @@ impl From<HotkeyError> for HotkeyStatus {
 }
 
 /// Owns one registration: registers on demand, releases exactly once, never panics.
+/// `hotkey`/`status` describe the requested combination; `active` is what is really registered
+/// (differs while a previous hotkey stays alive after a failed change).
 pub struct HotkeyManager<B: HotkeyBackend> {
     backend: B,
     hotkey: Hotkey,
     status: HotkeyStatus,
+    active: Option<Hotkey>,
 }
 
 impl<B: HotkeyBackend> HotkeyManager<B> {
@@ -142,6 +155,7 @@ impl<B: HotkeyBackend> HotkeyManager<B> {
             backend,
             hotkey,
             status: HotkeyStatus::Inactive,
+            active: None,
         }
     }
 
@@ -153,14 +167,72 @@ impl<B: HotkeyBackend> HotkeyManager<B> {
         self.status
     }
 
+    /// The previous hotkey that is still registered because the requested one failed.
+    pub fn fallback(&self) -> Option<Hotkey> {
+        self.active.filter(|active| *active != self.hotkey)
+    }
+
+    /// Settings hint for the current state.
+    pub fn message(&self) -> String {
+        self.status
+            .message_with(&self.hotkey, self.fallback().as_ref())
+    }
+
     /// Registers the hotkey. A no-op while already active; after a conflict it can be called
     /// again to retry.
     pub fn register(&mut self) -> HotkeyStatus {
         if self.status == HotkeyStatus::Active {
             return self.status;
         }
+        self.release();
+        self.try_register()
+    }
+
+    /// Switches to `hotkey` at runtime. If it cannot be registered the previous hotkey is
+    /// registered again, so the search stays reachable ([`fallback`](Self::fallback)).
+    /// Returns the status of the requested hotkey.
+    pub fn set_hotkey(&mut self, hotkey: Hotkey) -> HotkeyStatus {
+        if hotkey == self.hotkey && self.status == HotkeyStatus::Active {
+            return self.status;
+        }
+        let previous = self.active;
+        self.release();
+        self.hotkey = hotkey;
+        let status = self.try_register();
+        if status.is_problem()
+            && let Some(old) = previous.filter(|old| *old != hotkey)
+        {
+            match self.backend.register(old) {
+                Ok(()) => {
+                    self.active = Some(old);
+                    log::info!("Hotkey {} bleibt aktiv", old.label());
+                }
+                Err(error) => log::warn!(
+                    "Hotkey {} konnte nicht wiederhergestellt werden: {error}",
+                    old.label()
+                ),
+            }
+        }
+        status
+    }
+
+    /// Gives up whatever is registered with the backend.
+    fn release(&mut self) {
+        if self.active.take().is_none() {
+            return;
+        }
+        if let Err(error) = self.backend.unregister() {
+            log::warn!(
+                "Hotkey {} konnte nicht freigegeben werden: {error}",
+                self.hotkey.label()
+            );
+        }
+    }
+
+    fn try_register(&mut self) -> HotkeyStatus {
         self.status = match self.backend.register(self.hotkey) {
             Ok(()) => {
+                self.active = Some(self.hotkey);
                 log::info!("Hotkey {} registriert", self.hotkey.label());
                 HotkeyStatus::Active
             }
@@ -182,17 +254,9 @@ impl<B: HotkeyBackend> HotkeyManager<B> {
         self.status
     }
 
-    /// Releases the hotkey if (and only if) it is registered.
+    /// Releases the hotkey if (and only if) something is registered.
     pub fn unregister(&mut self) {
-        if self.status != HotkeyStatus::Active {
-            return;
-        }
-        if let Err(error) = self.backend.unregister() {
-            log::warn!(
-                "Hotkey {} konnte nicht freigegeben werden: {error}",
-                self.hotkey.label()
-            );
-        }
+        self.release();
         self.status = HotkeyStatus::Inactive;
     }
 }
@@ -540,6 +604,109 @@ mod tests {
         assert!(HotkeyStatus::Failed(5).message(&hk).contains("Fehler 5"));
         assert!(!HotkeyStatus::Active.is_problem());
         assert!(!HotkeyStatus::Inactive.is_problem());
+    }
+
+    const CTRL_ALT_SPACE: Hotkey = Hotkey {
+        modifiers: MOD_CONTROL | MOD_ALT,
+        vk: VK_SPACE,
+    };
+
+    #[test]
+    fn changing_hotkey_releases_old_and_registers_new() {
+        let (mock, calls) = Mock::new(vec![Ok(()), Ok(())]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        manager.register();
+        assert_eq!(manager.set_hotkey(CTRL_ALT_SPACE), HotkeyStatus::Active);
+        assert_eq!(manager.hotkey(), CTRL_ALT_SPACE);
+        assert_eq!(manager.fallback(), None);
+        assert_eq!(
+            calls.borrow().registered,
+            vec![Hotkey::ALT_SPACE, CTRL_ALT_SPACE]
+        );
+        assert_eq!(calls.borrow().unregistered, 1);
+        assert_eq!(manager.message(), "Globale Suche: Strg+Alt+Leertaste");
+        drop(manager);
+        assert_eq!(calls.borrow().unregistered, 2);
+    }
+
+    #[test]
+    fn conflicting_change_keeps_previous_hotkey_alive() {
+        let (mock, calls) = Mock::new(vec![Ok(()), Err(HotkeyError::Conflict), Ok(())]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        manager.register();
+        assert_eq!(manager.set_hotkey(CTRL_ALT_SPACE), HotkeyStatus::Conflict);
+        assert!(manager.status().is_problem());
+        assert_eq!(manager.fallback(), Some(Hotkey::ALT_SPACE));
+        assert_eq!(
+            calls.borrow().registered,
+            vec![Hotkey::ALT_SPACE, CTRL_ALT_SPACE, Hotkey::ALT_SPACE]
+        );
+        let message = manager.message();
+        assert!(
+            message.contains("Strg+Alt+Leertaste ist bereits belegt"),
+            "{message}"
+        );
+        assert!(
+            message.contains("Weiterhin aktiv: Alt+Leertaste"),
+            "{message}"
+        );
+        drop(manager);
+        assert_eq!(calls.borrow().unregistered, 2, "old one released on drop");
+    }
+
+    #[test]
+    fn failed_change_without_restorable_previous_has_no_fallback() {
+        let (mock, _) = Mock::new(vec![
+            Ok(()),
+            Err(HotkeyError::Conflict),
+            Err(HotkeyError::Other(5)),
+        ]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        manager.register();
+        assert_eq!(manager.set_hotkey(CTRL_ALT_SPACE), HotkeyStatus::Conflict);
+        assert_eq!(manager.fallback(), None);
+        assert!(manager.message().contains("nicht erreichbar"));
+    }
+
+    #[test]
+    fn changing_after_initial_conflict_registers_the_new_one() {
+        let (mock, calls) = Mock::new(vec![Err(HotkeyError::Conflict), Ok(())]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        assert_eq!(manager.register(), HotkeyStatus::Conflict);
+        assert_eq!(manager.set_hotkey(CTRL_ALT_SPACE), HotkeyStatus::Active);
+        assert_eq!(manager.fallback(), None);
+        assert_eq!(
+            calls.borrow().unregistered,
+            0,
+            "nothing was registered before"
+        );
+    }
+
+    #[test]
+    fn setting_the_same_hotkey_is_a_noop_when_active_and_a_retry_after_conflict() {
+        let (mock, calls) = Mock::new(vec![Ok(())]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        manager.register();
+        manager.set_hotkey(Hotkey::ALT_SPACE);
+        assert_eq!(calls.borrow().registered.len(), 1);
+
+        let (mock, calls) = Mock::new(vec![Err(HotkeyError::Conflict), Ok(())]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        manager.register();
+        assert_eq!(manager.set_hotkey(Hotkey::ALT_SPACE), HotkeyStatus::Active);
+        assert_eq!(calls.borrow().registered.len(), 2);
+    }
+
+    #[test]
+    fn register_after_fallback_drops_it_and_retries_the_requested_hotkey() {
+        let (mock, calls) = Mock::new(vec![Ok(()), Err(HotkeyError::Conflict), Ok(()), Ok(())]);
+        let mut manager = HotkeyManager::new(mock, Hotkey::ALT_SPACE);
+        manager.register();
+        manager.set_hotkey(CTRL_ALT_SPACE);
+        assert_eq!(manager.register(), HotkeyStatus::Active);
+        assert_eq!(manager.fallback(), None);
+        assert_eq!(calls.borrow().unregistered, 2);
+        assert_eq!(calls.borrow().registered.last(), Some(&CTRL_ALT_SPACE));
     }
 
     #[test]
