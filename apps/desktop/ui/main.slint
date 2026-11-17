@@ -4,7 +4,7 @@ import { Dropdown, DropdownList } from "dropdown.slint";
 import { TipRow, HoverTip } from "tooltip.slint";
 import { Button, ScrollView, CheckBox, SpinBox, Palette } from "std-widgets.slint";
 export struct DisplayRow { id:string, name:string, value:int, supported:bool, status:string }
-export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool }
+export struct AudioItem { id:string, name:string, value:int, muted:bool, master:bool, initial:string, icon:image, has-icon:bool, peak:int, peak-color:color }
 component Heading inherits Text { color:#f3f4f8; font-size:15px; font-weight:600; }
 component Hint inherits Text { color:#979eaf; font-size:12px; wrap:word-wrap; }
 component Card inherits Rectangle { background:#252832; border-radius:8px; }
@@ -151,7 +151,7 @@ export component MainWindow inherits Window {
  for row in root.audio: TipRow {height:row.master?0px:36px;visible:!row.master;text:row.name;inner-hover:aic.hovered||asl.hovered;inner-pressed:aic.pressed||asl.pressed;tip(t,x,y,h,s)=>{root.show-tip(t,x,y,h,s);}
  HorizontalLayout {padding-left:8px;padding-right:8px;spacing:10px;
  Rectangle{width:28px;aic := AppIcon{letter:row.initial;icon:row.icon;has-icon:row.has-icon;muted:row.muted;clicked=>{root.mute(row.id,!row.muted);}}}
- asl := ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;changed(value)=>{root.volume(row.id,round(value));}}
+ asl := ThinSlider{horizontal-stretch:1;value:row.value;dimmed:row.muted;level:row.peak;level-color:row.peak-color;changed(value)=>{root.volume(row.id,round(value));}}
  Text{width:36px;text:row.value;color:row.muted?#8a8d99:#e6e7ee;font-size:15px;horizontal-alignment:right;vertical-alignment:center;}
  }}
  }
