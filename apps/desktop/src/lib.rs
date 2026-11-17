@@ -6,6 +6,7 @@ pub mod meter;
 pub mod nexsearch;
 pub mod platform;
 pub mod popup_state;
+pub mod search_window;
 pub mod services;
 pub mod settings_worker;
 pub mod time_input;
