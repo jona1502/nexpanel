@@ -55,7 +55,8 @@ jobs:
         shell: pwsh
         run: |
           $zip = "dist/nexpanel-$($env:VERSION)-windows-x64.zip"
-          foreach ($f in @($zip, "$zip.sha256")) {
+          $setup = "dist/nexpanel-$($env:VERSION)-windows-x64-setup.exe"
+          foreach ($f in @($zip, "$zip.sha256", $setup)) {
             if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "Erwartete Datei fehlt: $f (package.ps1 Dateiname prüfen)." }
           }
       - name: Create GitHub release
@@ -63,12 +64,13 @@ jobs:
         run: |
           $zip = "dist/nexpanel-$($env:VERSION)-windows-x64.zip"
           $name = Split-Path -Leaf $zip
+          $setup = "dist/nexpanel-$($env:VERSION)-windows-x64-setup.exe"
           $header = @"
           ## Hinweise zu diesem Release
 
           - **Unsigniert:** Die Binärdatei ist nicht signiert. Windows SmartScreen zeigt eine Warnung an (erwartet).
           - **Nur Windows 11 x64.** Andere Plattformen und Windows-Versionen werden nicht unterstützt.
-          - **Kein Installer/MSI:** Das Paket enthält ``install.ps1`` und ``uninstall.ps1``, noch kein MSI.
+          - **Installation:** ``nexpanel-$($env:VERSION)-windows-x64-setup.exe`` ausführen (pro Benutzer, ohne Adminrechte). Nur diese Installation und die per ``install.ps1`` aus dem Zip kann sich selbst aktualisieren.
           - **SHA256 prüfen:** ``(Get-FileHash .\$name -Algorithm SHA256).Hash.ToLower()`` muss dem Wert in ``$name.sha256`` entsprechen.
           - **Slint-Lizenz/Attribution:** siehe [docs/licensing.md](https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:RELEASE_TAG)/docs/licensing.md).
           - **Projektlizenz:** Die Lizenz von NexPanel ist noch nicht gewählt.
@@ -76,7 +78,7 @@ jobs:
           ## Änderungen
           "@
           Set-Content -LiteralPath release-header.md -Value $header -Encoding utf8
-          $ghArgs = @($env:RELEASE_TAG, $zip, "$zip.sha256", '--title', "NexPanel $($env:VERSION)", '--notes-file', 'release-header.md', '--generate-notes', '--target', $env:GITHUB_SHA)
+          $ghArgs = @($env:RELEASE_TAG, $setup, $zip, "$zip.sha256", '--title', "NexPanel $($env:VERSION)", '--notes-file', 'release-header.md', '--generate-notes', '--target', $env:GITHUB_SHA)
           if ($env:RELEASE_DRAFT -eq 'true') { $ghArgs += '--draft' }
           if ([version]($env:VERSION -replace '[-+].*$', '') -lt [version]'1.0.0' -or $env:VERSION -match '-') { $ghArgs += '--prerelease' }
           gh release create @ghArgs

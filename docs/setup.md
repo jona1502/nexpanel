@@ -35,7 +35,9 @@ Konfiguration: `%LOCALAPPDATA%\NexPanel\settings.json`. Fehlende Datei lädt Def
 
 Standardmäßig läuft `cargo build -p nexpanel --release --locked`. Ausgabe: `dist/nexpanel-<Version>-windows-x64.zip` und `.zip.sha256` (Version aus `apps/desktop/Cargo.toml`). Das ZIP enthält exe, `THIRD-PARTY-NOTICES.md`, `VERSION.txt`, Installations-/Deinstallationsskript und deutsche Anleitung. SHA256 des ZIP mit `Get-FileHash -Algorithm SHA256` vergleichen. Die Prüfsumme erkennt Übertragungsfehler, ersetzt aber keine vertrauenswürdige Herkunft oder Signatur.
 
-ZIP in einen eigenen Ordner entpacken, PowerShell dort öffnen:
+Zusätzlich entsteht `dist/nexpanel-<Version>-windows-x64-setup.exe` (Inno Setup 6, `scripts/installer.iss`; ohne installiertes Inno Setup `-SkipInstaller` übergeben). Der Installer arbeitet pro Benutzer ohne Adminrechte, installiert nach `%LOCALAPPDATA%\NexPanel\bin`, legt einen Startmenü-Eintrag (optional Desktop) an und schreibt die Installationsmarkierung für den Updater. Deinstallation über Windows „Apps“; `settings.json` bleibt erhalten.
+
+Alternativ ohne Installer: ZIP in einen eigenen Ordner entpacken, PowerShell dort öffnen:
 
 ```powershell
 ./install.ps1

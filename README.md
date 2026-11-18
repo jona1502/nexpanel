@@ -13,7 +13,7 @@ cargo run -p nexpanel
 ./scripts/package.ps1
 ```
 
-Das ZIP unter `dist/nexpanel-0.2.1-windows-x64.zip` entpacken und dessen `install.ps1` ausführen. Installation nach `%LOCALAPPDATA%\NexPanel\bin`, optional mit Startmenü-Verknüpfung, ohne automatischen App-Start. Autostart wird nur in den App-Einstellungen aktiviert. Einstellungen unter `%LOCALAPPDATA%\NexPanel\settings.json` bleiben bei Deinstallation erhalten.
+`nexpanel-0.2.2-windows-x64-setup.exe` aus dem Release ausführen (pro Benutzer, ohne Adminrechte; Deinstallation über Windows „Apps“). Alternativ das ZIP entpacken und dessen `install.ps1` ausführen. Installation nach `%LOCALAPPDATA%\NexPanel\bin`, optional mit Startmenü-Verknüpfung, ohne automatischen App-Start. Autostart wird nur in den App-Einstellungen aktiviert. Einstellungen unter `%LOCALAPPDATA%\NexPanel\settings.json` bleiben bei Deinstallation erhalten.
 
 Tray-Klick öffnet oder verbirgt das Panel; Esc und Schließen blenden aus. Zum Beenden das Tray-Menü verwenden. `--background` startet verborgen, `--diagnostics` liest reale Geräte ohne Hardwareänderungen, `--capture-preview <Verzeichnis>` erzeugt fünf echte UI-Aufnahmen ohne Einstellungs- oder Hardwareänderungen und beendet die App. Weitere Optionen: `--help`.
 

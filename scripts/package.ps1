@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$SkipBuild)
+param([switch]$SkipBuild, [switch]$SkipInstaller)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
@@ -25,6 +25,18 @@ try {
     "$hash  $([IO.Path]::GetFileName($zip))" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
     Write-Host "Paket: $zip"
     Write-Host "SHA256: $hash"
+    if (-not $SkipInstaller) {
+      $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+      if (-not $iscc) {
+        $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+      }
+      if (-not $iscc) { throw 'Inno Setup 6 (ISCC.exe) fehlt. Installieren oder -SkipInstaller verwenden.' }
+      & $iscc "/DMyAppVersion=$version" "/DSourceDir=$stage" "/DOutputDir=$dist" (Join-Path $PSScriptRoot 'installer.iss')
+      if ($LASTEXITCODE -ne 0) { throw 'Installer-Build fehlgeschlagen.' }
+      $setup = Join-Path $dist "nexpanel-$version-windows-x64-setup.exe"
+      if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "Installer fehlt: $setup" }
+      Write-Host "Installer: $setup"
+    }
   } finally {
     # Nur eigene bekannte Dateien in der frisch erzeugten Stage löschen.
     foreach ($name in @('nexpanel.exe','install.ps1','uninstall.ps1','README.md','THIRD-PARTY-NOTICES.md','VERSION.txt')) { $path = Join-Path $stage $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path } }
