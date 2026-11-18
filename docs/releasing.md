@@ -36,7 +36,7 @@ NexPanel kann sich selbst aktualisieren (Einstellungen → Updates). Der Updater
 
 - Prüft beim Start und danach höchstens einmal in 24 Stunden (Schalter „Automatisch prüfen (täglich)“, Standard an; Zeitstempel `last_update_check` in `settings.json`) sowie auf Klick bei „Jetzt prüfen“. Die Prüfung liest `https://api.github.com/repos/jona1502/nexpanel/releases` und nimmt die höchste Version, die neuer als die laufende ist. **Pre-Releases zählen mit** (alle Versionen unter 1.0 sind Pre-Releases). Entwürfe sind für den Updater unsichtbar.
 - Lädt und installiert **nie von selbst**: Erst der Klick auf „Jetzt aktualisieren“ startet Download, Prüfung, Installation und Neustart. Beim Neustart gehen laufende Timer verloren (der Timerzustand wird ohnehin nicht über App-Neustarts gespeichert).
-- Ersetzt nur Installationen aus `scripts/install.ps1` (Ordner mit passender `.nexpanel-install.json`). Ein Entwicklungs-Build oder ein kopierter Ordner bekommt den Hinweis „nicht mit install.ps1 eingerichtet“ und kann nur prüfen.
+- Ersetzt nur Installationen aus dem Setup-Programm oder `scripts/install.ps1` (Ordner mit passender `.nexpanel-install.json`). Ein Entwicklungs-Build oder ein kopierter Ordner bekommt den Hinweis „nicht mit install.ps1 eingerichtet“ und kann nur prüfen.
 
 ### Anforderungen an ein Release
 
@@ -44,6 +44,7 @@ Damit ein Release für den Updater sichtbar ist, müssen beide Anhänge exakt so
 
 | Anhang | Inhalt |
 |---|---|
+| `nexpanel-X.Y.Z-windows-x64-setup.exe` | Inno-Setup-Installer (`scripts/installer.iss`, gebaut von `package.ps1`, braucht Inno Setup 6; `-SkipInstaller` überspringt ihn). Nur für Menschen, der Updater nutzt ihn nicht |
 | `nexpanel-X.Y.Z-windows-x64.zip` | Von `scripts/package.ps1`: `nexpanel.exe`, `install.ps1`, `uninstall.ps1`, `README.md`, `THIRD-PARTY-NOTICES.md`, `VERSION.txt`, alles flach ohne Unterordner |
 | `nexpanel-X.Y.Z-windows-x64.zip.sha256` | Eine Zeile `<sha256-hex>  <Dateiname>` (Ausgabe von `package.ps1`) |
 
